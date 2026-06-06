@@ -26,6 +26,8 @@ class InputThread(threading.Thread):
         self.BTN_WEST = 0 # X
         self.BTN_TL = 0 # LB
         self.BTN_TR = 0 # RB
+        self.BTN_SELECT = 0 # Back
+        self.BTN_START = 0 # Start
         
         self.running = True
         self.connected = False
@@ -50,6 +52,8 @@ class InputThread(threading.Thread):
                         elif event.code == 'BTN_WEST': self.BTN_WEST = event.state
                         elif event.code == 'BTN_TL': self.BTN_TL = event.state
                         elif event.code == 'BTN_TR': self.BTN_TR = event.state
+                        elif event.code == 'BTN_SELECT': self.BTN_SELECT = event.state
+                        elif event.code == 'BTN_START': self.BTN_START = event.state
             except Exception as e:
                 self.connected = False
                 time.sleep(1)
@@ -76,6 +80,8 @@ class ControllerAgent:
             
         self.gear_up_pressed = False
         self.gear_down_pressed = False
+        self.is_recording = False
+        self.record_btn_pressed = False
 
     def update(self, sensors):
         it = self.input_thread
@@ -110,6 +116,12 @@ class ControllerAgent:
             
         self.gear_up_pressed = gear_up
         self.gear_down_pressed = gear_down
+        
+        # Toggle registrazione
+        record_btn = it.BTN_SELECT or it.BTN_START
+        if record_btn and not self.record_btn_pressed:
+            self.is_recording = not self.is_recording
+        self.record_btn_pressed = record_btn
         
         # Cambio automatico
         if not gear_up and not gear_down:
@@ -152,15 +164,28 @@ def main():
     print(" LT / Tasto B: Freno")
     print(" RB / Tasto Y: Marcia Su")
     print(" LB / Tasto X: Marcia Giu")
+    print(" SELECT/START: Avvia/Pausa Registrazione Dati")
     print("=========================================================")
 
-    # CSV log
-    log_csv = open("controller_log.csv", "w")
-    log_csv.write("time,steer,accel,brake,gear,speedX,trackPos,angle,rpm,damage\n")
+    import os
+    csv_exists = os.path.isfile("controller_log.csv")
+    
+    # Apriamo in "a" (append) per accodare i dati
+    log_csv = open("controller_log.csv", "a")
+    if not csv_exists:
+        log_csv.write("time,steer,accel,brake,gear,speedX,trackPos,angle,rpm,damage,track0,track4,track9,track14,track18\n")
 
     log_json = []
+    # Carichiamo i dati vecchi se esistono per non sovrascriverli nel JSON
+    if os.path.isfile("controller_log.json"):
+        try:
+            with open("controller_log.json", "r") as f:
+                log_json = json.load(f)
+        except Exception:
+            pass
+
     t0 = time.time()
-    step = 0
+    step = len(log_json) # Riprendiamo il conteggio
 
     while True:
         S = client.S.d
@@ -168,7 +193,8 @@ def main():
         controller.update(S)
         a = controller.state
         
-        print(f"steer={a['steer']:5.2f} accel={a['accel']:5.2f} brake={a['brake']:5.2f} gear={a['gear']}", end='\r')
+        rec_status = "[REC]" if controller.is_recording else "[PAUSE]"
+        print(f"{rec_status} steer={a['steer']:5.2f} accel={a['accel']:5.2f} brake={a['brake']:5.2f} gear={a['gear']} | step={step}   ", end='\r')
 
         client.R.d['steer'] = a['steer']
         client.R.d['accel'] = a['accel']
@@ -182,35 +208,46 @@ def main():
 
         current_time = time.time() - t0
 
-        log_csv.write(
-            f"{current_time},{a['steer']},{a['accel']},{a['brake']},{a['gear']},"
-            f"{S.get('speedX',0)},{S.get('trackPos',0)},{S.get('angle',0)},"
-            f"{S.get('rpm',0)},{S.get('damage',0)}\n"
-        )
+        if controller.is_recording:
+            track_sensors = S.get('track', [0]*19)
+            if not isinstance(track_sensors, list) or len(track_sensors) < 19:
+                track_sensors = [0] * 19
+                
+            log_csv.write(
+                f"{current_time},{a['steer']},{a['accel']},{a['brake']},{a['gear']},"
+                f"{S.get('speedX',0)},{S.get('trackPos',0)},{S.get('angle',0)},"
+                f"{S.get('rpm',0)},{S.get('damage',0)},"
+                f"{track_sensors[0]},{track_sensors[4]},{track_sensors[9]},{track_sensors[14]},{track_sensors[18]}\n"
+            )
 
-        log_json.append({
-            "step": step,
-            "time": current_time,
-            "action": {
-                "steer": a['steer'],
-                "accel": a['accel'],
-                "brake": a['brake'],
-                "gear": a['gear']
-            },
-            "state": {
-                "speedX": S.get('speedX', 0),
-                "trackPos": S.get('trackPos', 0),
-                "angle": S.get('angle', 0),
-                "rpm": S.get('rpm', 0),
-                "damage": S.get('damage', 0)
-            }
-        })
+            log_json.append({
+                "step": step,
+                "time": current_time,
+                "action": {
+                    "steer": a['steer'],
+                    "accel": a['accel'],
+                    "brake": a['brake'],
+                    "gear": a['gear']
+                },
+                "state": {
+                    "speedX": S.get('speedX', 0),
+                    "trackPos": S.get('trackPos', 0),
+                    "angle": S.get('angle', 0),
+                    "rpm": S.get('rpm', 0),
+                    "damage": S.get('damage', 0),
+                    "track0": track_sensors[0],
+                    "track4": track_sensors[4],
+                    "track9": track_sensors[9],
+                    "track14": track_sensors[14],
+                    "track18": track_sensors[18]
+                }
+            })
 
-        step += 1
+            step += 1
 
-        if step % 100 == 0:
-            with open("controller_log.json", "w") as f:
-                json.dump(log_json, f, indent=2)
+            if step % 100 == 0:
+                with open("controller_log.json", "w") as f:
+                    json.dump(log_json, f, indent=2)
                 
         time.sleep(0.02)
 

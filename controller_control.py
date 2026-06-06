@@ -87,11 +87,11 @@ class ControllerAgent:
         # Trigger vanno da 0 a 255
         accel_axis = it.ABS_RZ / 255.0
         brake_axis = it.ABS_Z / 255.0
-        
+        '''
         # Aumentiamo gas/freno anche se si premono A/B per comodita'
         if it.BTN_SOUTH: accel_axis = 1.0 # A button
         if it.BTN_EAST or it.BTN_WEST: brake_axis = 1.0 # B or X button
-        
+        '''
         accel_axis = max(0.0, min(1.0, accel_axis))
         brake_axis = max(0.0, min(1.0, brake_axis))
 
@@ -99,7 +99,7 @@ class ControllerAgent:
         rpm = sensors.get('rpm', 0)
 
         # Gear Up: RB o Y
-        gear_up = it.BTN_TR or it.BTN_NORTH
+        gear_up = it.BTN_TR or it.BTN_SOUTH
         # Gear Down: LB o X
         gear_down = it.BTN_TL or it.BTN_WEST
         
@@ -110,7 +110,7 @@ class ControllerAgent:
             
         self.gear_up_pressed = gear_up
         self.gear_down_pressed = gear_down
-        
+        '''
         # Cambio automatico
         if not gear_up and not gear_down:
             if rpm > 7500 and 0 < self.state['gear'] < 6:
@@ -123,7 +123,7 @@ class ControllerAgent:
                 self.state['gear'] = -1
             elif self.state['gear'] == -1 and accel_axis > 0.5 and speed > -2.0:
                 self.state['gear'] = 1
-
+        '''
         # Dead zone
         if abs(steer_axis) < 0.1:
             steer_axis = 0.0
@@ -181,13 +181,13 @@ def main():
         client.get_servers_input()
 
         current_time = time.time() - t0
-
+        '''
         log_csv.write(
             f"{current_time},{a['steer']},{a['accel']},{a['brake']},{a['gear']},"
             f"{S.get('speedX',0)},{S.get('trackPos',0)},{S.get('angle',0)},"
-            f"{S.get('rpm',0)},{S.get('damage',0)}\n"
+            f"{S.get('rpm',0)}"
         )
-
+        '''
         log_json.append({
             "step": step,
             "time": current_time,

@@ -19,3 +19,6 @@ ENV/
 # File di sistema operativo
 .DS_Store
 Thumbs.db
+
+# Motore di gioco TORCS
+vtorcs-RL-color/

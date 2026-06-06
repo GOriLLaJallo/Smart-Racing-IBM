@@ -1,0 +1,21 @@
+# Cache e file compilati di Python
+__pycache__/
+*.py[cod]
+*$py.class
+# Log e file generati dalle run
+*.csv
+*.json
+controller_log.csv
+controller_log.json
+manual_log.csv
+manual_log.json
+# IDE e ambienti
+.idea/
+.vscode/
+.env
+torcs-env/
+venv/
+ENV/
+# File di sistema operativo
+.DS_Store
+Thumbs.db

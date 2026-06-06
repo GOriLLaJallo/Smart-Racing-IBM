@@ -487,7 +487,7 @@ def main():
     print("=" * 64)
 
     # ── Inizializza l'ambiente ──
-    env = TorcsEnv(vision=False, throttle=True, gear_change=True, early_termination=False)
+    env = TorcsEnv(vision=False, throttle=True, gear_change=True)
 
     TARGET_DT = 1.0 / 50.0  # 50 Hz target
     lap_attempt = 0

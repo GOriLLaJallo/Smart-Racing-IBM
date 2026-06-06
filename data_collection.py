@@ -501,9 +501,11 @@ def main():
             # Relaunch periodico, al primo giro, o se richiesto (es. fuori pista)
             need_relaunch = (lap_attempt == 1) or (lap_attempt % args.relaunch_every == 0) or force_relaunch
             if lap_attempt == 1:
-                ob = env.reset(relaunch=True)
+                env.reset(relaunch=True)
             else:
-                ob = env.reset(relaunch=need_relaunch)
+                env.reset(relaunch=need_relaunch)
+            
+            ob = env.client.S.d
             
             force_relaunch = False  # Reset flag dopo l'uso
 
@@ -550,8 +552,18 @@ def main():
                 if args.tcs:
                     action = apply_tcs(action, ob, slip_threshold=args.tcs_slip)
 
-                # ── Step simulazione ──
-                ob_next, reward, done, info = env.step(action)
+                # ── Step simulazione (Bypassiamo gym_torcs.step per supportare freno e dizionario completo) ──
+                env.client.R.d['steer'] = action[0]
+                env.client.R.d['accel'] = action[1]
+                env.client.R.d['brake'] = action[2]
+                env.client.R.d['gear'] = int(action[3])
+                
+                env.client.respond_to_server()
+                env.client.get_servers_input()
+                
+                ob_next = env.client.S.d
+                done = env.client.R.d.get('meta', 0) == 1
+                
                 next_state_vec = flatten_state(ob_next)
 
                 # ── Accumula in RAM ──

@@ -52,18 +52,18 @@ class DualSenseController:
         X (Cross)     → Downshift
     """
 
-    # Axis mapping (DualSense su Linux/Pygame)
+    # Axis mapping (DualSense su Windows/Pygame)
     AXIS_STEER = 0
-    AXIS_L2 = 2       # Brake
+    AXIS_L2 = 4       # Brake
     AXIS_R2 = 5       # Accel
 
     # Button mapping
-    BTN_CROSS = 0      # Downshift
-    BTN_SQUARE = 3     # Upshift
+    BTN_CROSS = 2      # Downshift
+    BTN_SQUARE = 0     # Upshift
 
     DEBOUNCE_MS = 200  # Millisecondi di debounce per i pulsanti del cambio
 
-    def __init__(self, steering_deadzone: float = 0.05):
+    def __init__(self, steering_deadzone: float = 0.20):
         pygame.init()
         pygame.joystick.init()
 

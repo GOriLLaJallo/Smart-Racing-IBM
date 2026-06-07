@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 
 # ==========================================================
 # 1. CLASSE PER LA NORMALIZZAZIONE DEI DATI
@@ -17,10 +17,8 @@ class Normalizer:
         self.std = None
         
     def fit(self, X):
-        # Calcola media e deviazione standard per ogni colonna (sensore)
         self.mean = np.mean(X, axis=0)
         self.std = np.std(X, axis=0)
-        # Evita divisioni per zero se un sensore ha sempre lo stesso valore
         self.std[self.std < 1e-6] = 1.0
         
     def transform(self, X):
@@ -38,7 +36,7 @@ class Normalizer:
             self.std = np.array(data['std'], dtype=np.float32)
 
 # ==========================================================
-# 2. DATASET PYTORCH
+# 2. DATASET PYTORCH (SINGOLO FRAME)
 # ==========================================================
 class TorcsDataset(Dataset):
     def __init__(self, states, actions):
@@ -49,126 +47,145 @@ class TorcsDataset(Dataset):
         return len(self.states)
         
     def __getitem__(self, idx):
+        # Nessun Frame Stacking, passiamo l'istante puro
         return self.states[idx], self.actions[idx]
 
 # ==========================================================
-# 3. MODELLO DI RETE NEURALE (MLP)
+# 3. MODELLO DI RETE NEURALE (CON DROPOUT)
 # ==========================================================
 class BCModel(nn.Module):
     def __init__(self, input_dim=29, output_dim=3):
         super(BCModel, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 128),
+            nn.Linear(input_dim, 256),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Dropout(0.2),  # <-- NOVITÀ: Spegne il 20% dei neuroni (Anti-Overfitting)
+            nn.Linear(256, 128),
             nn.ReLU(),
+            nn.Dropout(0.2),  # <-- NOVITÀ: Costringe la rete a generalizzare
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, output_dim)
-            # Nessuna attivazione finale: lasciamo che il MSELoss adatti i valori al range corretto
         )
         
     def forward(self, x):
-        return self.net(x)
+        out = self.net(x)
+        steer = torch.tanh(out[:, 0:1])
+        pedals = torch.sigmoid(out[:, 1:3])
+        return torch.cat([steer, pedals], dim=1)
 
 # ==========================================================
-# 4. FUNZIONE PRINCIPALE DI ADDESTRAMENTO
+# 4. LOSS PERSONALIZZATA (WEIGHTED MSE)
+# ==========================================================
+def weighted_mse_loss(predictions, targets, device):
+    sq_error = (predictions - targets) ** 2
+    weights = torch.tensor([1.0, 1.0, 5.0], device=device)
+    weighted_sq_error = sq_error * weights
+    return weighted_sq_error.mean()
+
+# ==========================================================
+# 5. FUNZIONE PRINCIPALE DI ADDESTRAMENTO
 # ==========================================================
 def main():
     data_dir = "train_set/laps"
     
     print("="*60)
-    print(" 🧠 DATA PREPROCESSING E ADDESTRAMENTO (BEHAVIORAL CLONING) ")
+    print("  🧠 BEHAVIORAL CLONING (Anti-Overfitting & Stabile)")
     print("="*60)
     
-    # ── 1. Cerca i file HDF5 ──
-    h5_files = glob.glob(os.path.join(data_dir, "*.h5"))
+    h5_files = sorted(glob.glob(os.path.join(data_dir, "*.h5")))
     if not h5_files:
-        print(f"ERRORE: Nessun file .h5 trovato nella cartella {data_dir}.")
-        print("Assicurati di aver guidato qualche giro valido con data_collection.py!")
+        print(f"ERRORE: Nessun file .h5 trovato in {data_dir}.")
         return
         
-    print(f"Trovati {len(h5_files)} file .h5. Caricamento in corso...")
-    
-    all_states = []
-    all_actions = []
-    
-    # ── 2. Carica i Dati ──
+    all_states, all_actions = [], []
     for f_path in h5_files:
         try:
             with h5py.File(f_path, 'r') as h5f:
-                s = np.array(h5f['states'])
-                a = np.array(h5f['actions'])
-                all_states.append(s)
-                all_actions.append(a)
+                all_states.append(np.array(h5f['states']))
+                all_actions.append(np.array(h5f['actions']))
         except Exception as e:
-            print(f"Errore caricando {f_path}: {e}")
+            pass
             
-    # Unisci tutti i giri in un unico grande array
     X_raw = np.concatenate(all_states, axis=0)
-    Y_raw = np.concatenate(all_actions, axis=0)
+    Y_raw = np.concatenate(all_actions, axis=0)[:, :3]
     
-    # Rimuoviamo la Marcia (gear) da Y. 
-    # Y originale = [steer, accel, brake, gear]. Y nuovo = [steer, accel, brake]
-    Y_raw = Y_raw[:, :3]
-    
-    print(f"Totale campioni caricati (step): {len(X_raw)}")
-    print(f"Dimensioni Stati (X): {X_raw.shape}")
-    print(f"Dimensioni Azioni (Y): {Y_raw.shape}")
-    
-    # ── 3. Normalizzazione ──
-    print("\n[+] Normalizzazione dei sensori...")
+    # ── Normalizzazione ──
     normalizer = Normalizer()
     normalizer.fit(X_raw)
     X_norm = normalizer.transform(X_raw)
-    
     normalizer.save("bc_scaler.json")
     
-    # ── 4. Creazione Dataset e DataLoader ──
-    # Mescola e crea batch da 64 campioni
-    dataset = TorcsDataset(X_norm, Y_raw)
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+    print(f"\n[+] Caricati {len(X_norm)} campioni totali (Senza filtri sui rettilinei).")
     
-    # ── 5. Inizializzazione Rete e Ottimizzatore ──
+    # ── Validation Split (80/20) ──
+    full_dataset = TorcsDataset(X_norm, Y_raw)
+    val_size = int(len(full_dataset) * 0.2)
+    train_size = len(full_dataset) - val_size
+    
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+    
+    # ── Inizializzazione ──
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\n[+] Addestramento su dispositivo: {device}")
-    
     model = BCModel(input_dim=29, output_dim=3).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.0005)
     
-    # ── 6. Ciclo di Addestramento (Epoche) ──
-    epochs = 30
-    print("\n[+] Inizio Addestramento della Rete Neurale...")
+    # NOVITÀ: Parametri molto più stringenti per evitare la "memoria fotografica"
+    epochs = 80       # Massimo 80 epoche per non farlo studiare troppo
+    patience = 10     # Si ferma prima se non vede miglioramenti netti
+    patience_counter = 0
+    best_val_loss = float('inf')
+    
+    print(f"\n[+] Addestramento su: {device} | Input: 29D")
     
     for epoch in range(1, epochs + 1):
+        # -- Fase di Training --
         model.train()
-        total_loss = 0.0
-        
-        for batch_idx, (states, actions) in enumerate(dataloader):
+        train_loss = 0.0
+        for states, actions in train_loader:
             states, actions = states.to(device), actions.to(device)
             
-            # Forward pass (predizione)
             predictions = model(states)
+            loss = weighted_mse_loss(predictions, actions, device)
             
-            # Calcolo dell'errore (Loss)
-            loss = criterion(predictions, actions)
-            
-            # Backward pass (Correzione dei pesi)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            train_loss += loss.item()
             
-            total_loss += loss.item()
-            
-        avg_loss = total_loss / len(dataloader)
-        print(f"  Epoca [{epoch}/{epochs}] - Loss (MSE): {avg_loss:.6f}")
+        avg_train_loss = train_loss / len(train_loader)
         
-    # ── 7. Salvataggio del Modello ──
-    torch.save(model.state_dict(), "bc_model.pth")
+        # -- Fase di Validazione --
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for states, actions in val_loader:
+                states, actions = states.to(device), actions.to(device)
+                predictions = model(states)
+                loss = weighted_mse_loss(predictions, actions, device)
+                val_loss += loss.item()
+                
+        avg_val_loss = val_loss / len(val_loader)
+        
+        saved_flag = ""
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_counter = 0
+            torch.save(model.state_dict(), "bc_model.pth")
+            saved_flag = " ★ SAVED"
+        else:
+            patience_counter += 1
+            
+        print(f"  Epoca [{epoch:03d}/{epochs}] - Train: {avg_train_loss:.5f} | Val: {avg_val_loss:.5f}{saved_flag}")
+        
+        if patience_counter >= patience:
+            print(f"\n  ⏹ Early Stopping: nessun miglioramento per {patience} epoche.")
+            break
+            
     print("\n[+] ADDESTRAMENTO COMPLETATO!")
-    print("  Il modello è stato salvato in 'bc_model.pth'")
-    print("  Ora l'Agente è pronto per guidare da solo!")
+    print("  Il modello è pronto in 'bc_model.pth'.")
 
 if __name__ == "__main__":
     main()

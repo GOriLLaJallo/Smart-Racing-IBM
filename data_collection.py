@@ -649,13 +649,13 @@ def main():
                     if done and not lap_completed:
                         print("\n  [Info] Simulazione terminata esternamente (TORCS chiuso).")
                     break
-
+                '''
                 # ── Frame rate control dinamico (50Hz) ──
                 elapsed = time.perf_counter() - loop_start
                 sleep_time = max(0.0, TARGET_DT - elapsed)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
-
+                '''
             # ────────────────────────────────────────
             #  Fine giro: valutazione e salvataggio
             # ────────────────────────────────────────

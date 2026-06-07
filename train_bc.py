@@ -133,7 +133,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=0.0005)
     
     # NOVITÀ: Parametri molto più stringenti per evitare la "memoria fotografica"
-    epochs = 80       # Massimo 80 epoche per non farlo studiare troppo
+    epochs = 150       # Massimo 80 epoche per non farlo studiare troppo
     patience = 10     # Si ferma prima se non vede miglioramenti netti
     patience_counter = 0
     best_val_loss = float('inf')

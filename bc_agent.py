@@ -92,7 +92,7 @@ def main():
             # ==========================================
             # LIMITATORE DI VELOCITÀ RIGIDO
             # ==========================================
-            SPEED_LIMIT = 90.0
+            SPEED_LIMIT = 100.0
             if spd > SPEED_LIMIT:
                 accel = 0.0 # Taglia il gas
                 if spd > SPEED_LIMIT + 5.0:

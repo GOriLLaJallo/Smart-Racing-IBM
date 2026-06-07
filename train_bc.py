@@ -124,16 +124,22 @@ def main():
     train_size = len(full_dataset) - val_size
     
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
     
     # ── Inizializzazione ──
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BCModel(input_dim=29, output_dim=3).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005)
+    # Passiamo ad AdamW (migliore generalizzazione rispetto ad Adam)
+    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+    
+    # Aggiungiamo lo Scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=4, verbose=True
+    )
     
     # NOVITÀ: Parametri molto più stringenti per evitare la "memoria fotografica"
-    epochs = 150       # Massimo 80 epoche per non farlo studiare troppo
+    epochs = 150       # Massimo 150 epoche per non farlo studiare troppo
     patience = 10     # Si ferma prima se non vede miglioramenti netti
     patience_counter = 0
     best_val_loss = float('inf')
@@ -168,6 +174,9 @@ def main():
                 val_loss += loss.item()
                 
         avg_val_loss = val_loss / len(val_loader)
+        
+        # Fai aggiornare lo scheduler basandosi sulla validation loss
+        scheduler.step(avg_val_loss)
         
         saved_flag = ""
         if avg_val_loss < best_val_loss:

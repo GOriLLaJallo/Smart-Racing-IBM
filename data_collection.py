@@ -347,10 +347,6 @@ def _get_last_lap_time(obs: dict) -> float:
     return float(llt)
 
 
-
-
-
-
 def apply_tcs(action: np.ndarray, obs: dict, slip_threshold: float = 5.0) -> np.ndarray:
     """Traction Control System — riduce l'acceleratore in caso di slittamento.
 
@@ -386,6 +382,37 @@ def apply_tcs(action: np.ndarray, obs: dict, slip_threshold: float = 5.0) -> np.
         action[1] *= reduction  # Scala l'acceleratore
 
     return action
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Auto-Gearing Deterministico (Anti-hunting)
+# ──────────────────────────────────────────────────────────────────────
+
+# Soglie di velocità (km/h) per salire o scendere di marcia
+UP_SPEED = [55.0, 118.0, 200.0, 258.0, 286.0]
+DN_SPEED = [40.0, 92.0, 165.0, 232.0, 272.0]
+
+UP_RPM_GATE = 15500.0   
+UP_ACCEL_GATE = 0.4     
+SHIFT_COOLDOWN = 5      
+
+def compute_gear(speed_kmh: float, accel: float, rpm: float, current_gear: int, steps_since_shift: int):
+    """Marcia deterministica robusta. Cambia al massimo di ±1 per chiamata."""
+    g = int(current_gear)
+    if g < 1:
+        g = 1
+    if steps_since_shift < SHIFT_COOLDOWN:
+        return g, False
+
+    # UPSHIFT: solo sul gas + rpm alti + sopra la soglia di velocità della marcia.
+    if g < 6 and speed_kmh > UP_SPEED[g - 1] and accel > UP_ACCEL_GATE and rpm > UP_RPM_GATE:
+        return g + 1, True
+
+    # DOWNSHIFT: la velocità è scesa sotto la soglia della marcia.
+    if g > 1 and speed_kmh < DN_SPEED[g - 2]:
+        return g - 1, True
+
+    return g, False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -431,6 +458,10 @@ def main():
     parser.add_argument(
         "--segment_only", action="store_true",
         help="Salva SOLO i segmenti dentro le zone (raccolta parziale): guidi giri interi, vengono tenute solo le curve strette."
+    )
+    parser.add_argument(
+        "--auto_gear", action="store_true",
+        help="Abilita il cambio automatico deterministico (ignora l'input manuale delle marce)"
     )
     args = parser.parse_args()
 
@@ -517,8 +548,6 @@ def main():
             lap_dists: list = []  # distFromStart per step (METADATO: NON entra negli stati 29D)
             active_zone_idx = None  # indice zona corrente (per il rumble all'ingresso)
 
-
-
             # ── Stato di validità del giro ──
             lap_valid = True
             invalidation_reason = ""
@@ -531,8 +560,9 @@ def main():
             prev_cur_lap_time = _get_cur_lap_time(ob)
             prev_dist = _get_dist_from_start(ob)
 
-            # ── Reset marcia ──
+            # ── Reset marcia e cooldown ──
             controller.gear = 1
+            steps_since_shift = 0
 
             print(f"\n{'─' * 64}")
             print(f"  🏁 TENTATIVO GIRO #{lap_attempt}  (giri salvati finora: {lap_counter})")
@@ -551,6 +581,37 @@ def main():
                 # ── Traction Control System ──
                 if args.tcs:
                     action = apply_tcs(action, ob, slip_threshold=args.tcs_slip)
+
+                # ── Auto-Gearing Deterministico ──
+                if args.auto_gear:
+                    # Estrazione sicura dei valori scalari dall'osservazione
+                    speed_x_raw = ob.get('speedX', 0.0)
+                    speed_x_val = float(speed_x_raw.flat[0]) if isinstance(speed_x_raw, np.ndarray) else float(speed_x_raw)
+                    speed_kmh = speed_x_val * 50.0  # Moltiplicatore basato sulle specifiche in gearing.py
+                    
+                    rpm_raw = ob.get('rpm', 0.0)
+                    rpm_val = float(rpm_raw.flat[0]) if isinstance(rpm_raw, np.ndarray) else float(rpm_raw)
+                    
+                    # Usa l'acceleratore post-TCS per coerenza logica
+                    accel_applied = action[1] 
+                    
+                    new_gear, shifted = compute_gear(
+                        speed_kmh=speed_kmh, 
+                        accel=accel_applied, 
+                        rpm=rpm_val, 
+                        current_gear=controller.gear, 
+                        steps_since_shift=steps_since_shift
+                    )
+                    
+                    if shifted:
+                        controller.gear = new_gear
+                        steps_since_shift = 0
+                        # Commentato per evitare spam nel log durante la guida
+                        # print(f"  [Auto-Gear] Marcia modificata: {new_gear}", end='\r')
+                    else:
+                        steps_since_shift += 1
+                    
+                    action[3] = float(controller.gear)
 
                 # ── Step simulazione (Bypassiamo gym_torcs.step per supportare freno e dizionario completo) ──
                 env.client.R.d['steer'] = action[0]
@@ -571,8 +632,6 @@ def main():
                 lap_states.append(state_vec.copy())
                 lap_actions.append(action.copy())
                 lap_dists.append(_get_dist_from_start(ob))
-
-
 
                 state_vec = next_state_vec
                 ob = ob_next
@@ -598,8 +657,6 @@ def main():
                 current_dist = _get_dist_from_start(ob_next)
 
                 # ── Raccolta mirata: feedback APTICO all'ingresso di una zona curva ──
-                # La zona si identifica per POSIZIONE (distFromStart). Vibrazione gentile
-                # del controller quando entri: niente log da leggere mentre guidi.
                 cur_zone = _zone_index(current_dist, zones)
                 if cur_zone is not None and cur_zone != active_zone_idx:
                     controller.rumble(intensity=0.3, duration_ms=180)  # pulsazione gentile = "sei in curva target"
@@ -634,7 +691,6 @@ def main():
                 elif current_dist < 50.0 and prev_dist > 500.0:
                     # Abbiamo passato il traguardo (distanza resettata)
                     # Aspettiamo 10 step per vedere se lastLapTime si aggiorna prima di chiudere
-                    # Ma per sicurezza, se dopo un po' non succede nulla, chiudiamo come invalido.
                     if step > 500: # Evita reset spuri alla partenza
                         lap_completed = True
                         lap_valid = False
@@ -649,13 +705,7 @@ def main():
                     if done and not lap_completed:
                         print("\n  [Info] Simulazione terminata esternamente (TORCS chiuso).")
                     break
-                '''
-                # ── Frame rate control dinamico (50Hz) ──
-                elapsed = time.perf_counter() - loop_start
-                sleep_time = max(0.0, TARGET_DT - elapsed)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                '''
+
             # ────────────────────────────────────────
             #  Fine giro: valutazione e salvataggio
             # ────────────────────────────────────────
@@ -666,7 +716,6 @@ def main():
                 states_np = np.stack(lap_states)
                 actions_np = np.stack(lap_actions)
                 # Metadato posizione (allineato agli stati). NON è una feature di rete:
-                # serve solo per analisi/corner-emphasis esatti senza dipendere dal backup 30D.
                 dists_np = np.asarray(lap_dists[:len(states_np)], dtype=np.float32)
 
                 def _write_h5(path, st, ac, di):
@@ -681,7 +730,6 @@ def main():
 
                 if args.segment_only:
                     # Raccolta PARZIALE: guidi il giro intero, tengo solo i segmenti dentro le zone
-                    # (con margine di approccio per uno stacking temporale valido).
                     segs = [(s, e) for (s, e) in _extract_segments(dists_np, zones, margin_steps=15) if e - s >= 20]
                     for (s, e) in segs:
                         lap_counter += 1

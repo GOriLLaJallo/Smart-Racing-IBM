@@ -1,9 +1,11 @@
 import os
 import sys
 import time
+import json
 import numpy as np
 import torch
 import snakeoil3_gym as snakeoil3
+from collections import deque 
 
 from data_collection import flatten_state, apply_tcs
 from gearing import compute_gear
@@ -16,7 +18,7 @@ except ImportError:
 
 def main():
     print("="*60)
-    print(" 🤖 AGENTE AUTONOMO - STANDARD (NO STATE STACKING) ")
+    print(" 🤖 AGENTE AUTONOMO STABILIZZATO (K=3, Input Dim = 87) ")
     print("="*60)
 
     model_path = "models/torcs_driver_jit.pt"
@@ -25,7 +27,7 @@ def main():
         return
         
     device = torch.device("cpu")
-    print(f"[+] Caricamento del modello JIT End-to-End su {device}...")
+    print(f"[+] Caricamento del modello JIT End-to-End...")
     model = torch.jit.load(model_path, map_location=device)
     model.eval() 
 
@@ -35,20 +37,27 @@ def main():
     current_gear = 1
     steps_since_shift = 0
     prev_steer = 0.0
+    prev_brake = 0.0  # <--- NUOVO: Stato storico per la frenata progressiva
+
+    state_history = deque(maxlen=3)
 
     print("\n🏎️ L'AGENTE STA GUIDANDO! Premi Ctrl+C per fermare.")
     
     try:
         while True:
             raw_ob = env.client.S.d
-            
-            # 1. Estrazione del vettore di stato GREZZO (29 feature)
             state_vec = flatten_state(raw_ob)
             
-            # Trasformazione in tensore PyTorch [1, 29]
-            state_tensor = torch.FloatTensor(state_vec).unsqueeze(0).to(device)
+            if len(state_history) == 0:
+                state_history.append(state_vec)
+                state_history.append(state_vec)
+                state_history.append(state_vec)
+            else:
+                state_history.append(state_vec)
+                
+            stacked_state = np.concatenate(list(state_history))
+            state_tensor = torch.FloatTensor(stacked_state).unsqueeze(0).to(device)
             
-            # 2. Predizione End-to-End JIT
             with torch.no_grad():
                 pred = model(state_tensor).numpy()[0]
                 
@@ -58,58 +67,52 @@ def main():
             
             spd = float(np.array(raw_ob.get('speedX', 0.0)).flat[0])
             rpm = float(np.array(raw_ob.get('rpm', 0.0)).flat[0])
-            track_pos = float(np.array(raw_ob.get('trackPos', 0.0)).flat[0])
 
             # ==========================================
-            # 1. DEADZONE FRENO E SMORZAMENTO
+            # 1. FILTRO FRENO PROGRESSIVO
             # ==========================================
-            if raw_brake < 0.10:
+            if raw_brake < 0.12:
                 raw_brake = 0.0
             else:
-                # Dimezza l'intensità delle frenate impulsive
-                raw_brake = raw_brake * 0.5 
+                raw_brake = raw_brake * 0.45  # Parzializzazione del picco
+            
+            # Filtro EMA sul freno per renderlo analogico e fluido
+            alpha_brake = 0.15
+            brake = (alpha_brake * raw_brake) + ((1.0 - alpha_brake) * prev_brake)
+            prev_brake = brake
             
             # ==========================================
-            # 2. ANTI-STALLO E RECUPERO PANICO
+            # 2. ANTI-STALLO ED EVITAMENTO BLOCCHI ALLA PARTENZA
             # ==========================================
-            if spd < 20.0:
-                raw_brake = 0.0                
-                raw_accel = max(raw_accel, 0.65) 
+            if spd < 30.0:
+                brake = 0.0                
+                prev_brake = 0.0
+                raw_accel = max(raw_accel, 0.80) 
 
             # ==========================================
-            # 3. FILTRO VOLANTE (Anti-ZigZag)
+            # 3. FILTRO STERZO SMORZATO (ELIMINA ZIGZAG IN PARTENZA)
             # ==========================================
-            raw_steer = raw_steer * 1.0 
-            alpha_steer = 0.40 
+            # Portato a 0.22 per eliminare le micro-oscillazioni e assorbire le imperfezioni ad alta frequenza
+            alpha_steer = 0.22 
             steer = (alpha_steer * raw_steer) + ((1.0 - alpha_steer) * prev_steer)
-            
-            # ==========================================
-            # 4. GUARDRAIL VIRTUALE PROPORZIONALE
-            # ==========================================
-            if abs(track_pos) > 0.75:
-                excess = abs(track_pos) - 0.75
-                correction = excess * 0.8  
-                if track_pos > 0:  
-                    steer -= correction
-                else:              
-                    steer += correction
-
             prev_steer = steer
+            
             steer = max(-1.0, min(1.0, steer))
             accel = max(0.0, min(1.0, raw_accel))
-            brake = max(0.0, min(1.0, raw_brake))
+            brake = max(0.0, min(1.0, brake))
             
-            # Impedisce di accelerare mentre si frena
+            # Impedisce la sovrapposizione distruttiva di freno e acceleratore
             accel = accel * (1.0 - brake)
             
-            print(f"Velocità: {spd:5.1f} km/h | Freno Rete: {raw_brake:.2f} | M: {current_gear}", end='\r')
+            print(f"Velocità: {spd:5.1f} km/h | Sterzo Filtrato: {steer:.3f} | Freno: {brake:.2f}", end='\r')
             
             # ==========================================
             # LIMITATORE DI VELOCITÀ MORBIDO
             # ==========================================
-            SPEED_LIMIT = 120.0
+            SPEED_LIMIT = 90.0
             if spd > SPEED_LIMIT:
-                accel = max(0.0, accel - 0.5) 
+                accel = max(0.0, accel - 0.5)
+            # ==========================================
             
             current_gear, shifted = compute_gear(spd, accel, rpm, current_gear, steps_since_shift)
             steps_since_shift = 0 if shifted else steps_since_shift + 1
@@ -126,11 +129,13 @@ def main():
             env.client.get_servers_input()
             
             if env.client.R.d.get('meta', 0) == 1:
-                print("\n\n[!] Traguardo raggiunto o fuori pista. Riavvio...")
+                print("\n\n[!] Fine sessione o fuori pista. Reset totale...")
                 env.reset(relaunch=False)
                 current_gear = 1
                 steps_since_shift = 0
                 prev_steer = 0.0 
+                prev_brake = 0.0
+                state_history.clear() 
                 
             time.sleep(0.01)
 

@@ -75,9 +75,9 @@ def main():
             # 2. ANTI-STALLO E RECUPERO PANICO
             # ==========================================
             # Se l'auto sta andando a meno di 15 km/h (quasi ferma)
-            if spd < 15.0:
+            if spd < 20.0:
                 raw_brake = 0.0                # Rilascia il freno forzatamente
-                raw_accel = max(raw_accel, 0.5) # Dai almeno il 50% di gas per ripartire
+                raw_accel = max(raw_accel, 0.65) # Dai almeno il 50% di gas per ripartire
 
             # ==========================================
             # 3. FILTRO VOLANTE (Anti-ZigZag)
@@ -114,7 +114,7 @@ def main():
             # ==========================================
             # LIMITATORE DI VELOCITÀ RIGIDO
             # ==========================================
-            SPEED_LIMIT = 90.0
+            SPEED_LIMIT = 80.0
             if spd > SPEED_LIMIT:
                 accel = 0.0 # Taglia il gas
                 if spd > SPEED_LIMIT + 5.0:

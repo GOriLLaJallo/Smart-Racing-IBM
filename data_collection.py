@@ -583,7 +583,7 @@ def main():
                     current_track_pos = current_track_pos.flat[0]
                 
                 # Usiamo 1.25 come limite per permettere una guida più aggressiva sui cordoli.
-                if abs(current_track_pos) > 1.25:
+                if abs(current_track_pos) > 1.5:
                     print(f"\n  ❌ [OFF-TRACK] trackPos: {current_track_pos:.2f} - Riavvio immediato simulazione.")
                     went_off_track = True
                     lap_completed = True

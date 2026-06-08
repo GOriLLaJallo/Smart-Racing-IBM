@@ -95,7 +95,7 @@ def main():
             track_pos = float(np.array(raw_ob.get('trackPos', 0.0)).flat[0])
             
             # Se la rete la sta mandando troppo vicina all'erba, forziamo la correzione
-            if track_pos > 0.80:  # Pericolo a Sinistra!
+            '''if track_pos > 0.80:  # Pericolo a Sinistra!
                 steer = min(steer, -0.2)  # Forza una sterzata verso Destra
             elif track_pos < -0.80: # Pericolo a Destra!
                 steer = max(steer, 0.2)   # Forza una sterzata verso Sinistra'''

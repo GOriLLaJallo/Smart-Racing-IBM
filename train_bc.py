@@ -8,9 +8,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+# [MODIFICA 1] Importato train_test_split per dividere i dati prima del pre-processing
+from sklearn.model_selection import train_test_split 
 
 # ==========================================================
 # 1. DATASET PYTORCH (Legge i file .h5 della tua data collection)
@@ -144,14 +146,23 @@ def main():
     X_raw = X_raw[valid_indices]
     y_raw = y_raw[valid_indices]
 
-    # ── Pre-Processing (StandardScaler + PCA 95%) ──
-    print("[PRE-PROC] Fitting StandardScaler di Scikit-Learn...")
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_raw)
+    # ==========================================================
+    # [MODIFICA 1] PRE-PROCESSING (Niente Data Leakage)
+    # ==========================================================
+    print("[PRE-PROC] Divisione dei dati in Train e Validation...")
+    X_train_raw, X_val_raw, y_train, y_val = train_test_split(
+        X_raw, y_raw, test_size=0.15, random_state=42
+    )
     
-    print("[PRE-PROC] Fitting PCA (95% varianza trattenuta)...")
+    print("[PRE-PROC] Fitting StandardScaler di Scikit-Learn (Solo sul Train)...")
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_raw)
+    X_val_scaled = scaler.transform(X_val_raw)  # Solo transform per la validazione
+    
+    print("[PRE-PROC] Fitting PCA (95% varianza trattenuta) (Solo sul Train)...")
     pca = PCA(n_components=0.95, random_state=42)
-    X_pca = pca.fit_transform(X_scaled).astype(np.float32)
+    X_train_pca = pca.fit_transform(X_train_scaled).astype(np.float32)
+    X_val_pca = pca.transform(X_val_scaled).astype(np.float32)
     input_dim_pca = pca.n_components_
     
     with open(os.path.join(model_dir, "scaler.pkl"), "wb") as f: pickle.dump(scaler, f)
@@ -159,11 +170,9 @@ def main():
     print(f"[DATI] Feature Originali: {input_dim_raw} -> Ridotte via PCA a: {input_dim_pca}")
 
     # ── Dataset e Dataloader ──
-    full_dataset = TorcsDataset(X_pca, y_raw)
-    val_size = int(len(full_dataset) * 0.15)
-    train_size = len(full_dataset) - val_size
-    
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
+    # [MODIFICA 1] Creazione diretta con i dati già separati
+    train_dataset = TorcsDataset(X_train_pca, y_train)
+    val_dataset = TorcsDataset(X_val_pca, y_val)
     
     # Forziamo l'ambiente a girare interamente su CPU
     device = torch.device("cpu")
@@ -175,10 +184,17 @@ def main():
     criterion = WeightedMSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     
-    epochs = 100
+    epochs = 60
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
     
     best_val_loss = float('inf')
+    
+    # ==========================================================
+    # [MODIFICA 4] SETUP EARLY STOPPING
+    # ==========================================================
+    patience = 15
+    epochs_no_improve = 0
+    
     print(f"\n[TRAIN] Avvio su: {device} | Parametri Rete: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     for epoch in range(1, epochs + 1):
@@ -214,13 +230,25 @@ def main():
         scheduler.step()
         
         saved_flag = ""
+        
+        # ==========================================================
+        # [MODIFICA 4] LOGICA DI EARLY STOPPING NEL CICLO
+        # ==========================================================
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), os.path.join(model_dir, "best_weights.pth"))
             saved_flag = " ★ BEST"
+            epochs_no_improve = 0  # Resetta la pazienza
+        else:
+            epochs_no_improve += 1
             
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Ep {epoch:>3d}/{epochs} | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f} | LR: {current_lr:.6f} | Tempo: {time.time()-t0:.1f}s{saved_flag}")
+
+        # Ferma l'addestramento se non ci sono miglioramenti
+        if epochs_no_improve >= patience:
+            print(f"\n[EARLY STOPPING] Nessun miglioramento per {patience} epoche. Addestramento interrotto in anticipo.")
+            break
 
     # ==========================================================
     # 6. COMPILAZIONE JIT END-TO-END FINALIZZATA PER CPU

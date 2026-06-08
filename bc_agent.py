@@ -98,7 +98,7 @@ def main():
             if track_pos > 0.80:  # Pericolo a Sinistra!
                 steer = min(steer, -0.2)  # Forza una sterzata verso Destra
             elif track_pos < -0.80: # Pericolo a Destra!
-                steer = max(steer, 0.2)   # Forza una sterzata verso Sinistra
+                steer = max(steer, 0.2)   # Forza una sterzata verso Sinistra'''
 
             prev_steer = steer
             steer = max(-1.0, min(1.0, steer))

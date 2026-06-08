@@ -93,7 +93,7 @@ class WeightedMSELoss(nn.Module):
     def __init__(self):
         super().__init__()
         # Pesi ottimizzati: Sterzo=2.0, Acceleratore=1.0, Freno=5.0 (alta sensibilità sulle staccate)
-        self.register_buffer("weights", torch.tensor([2.0, 1.0, 5.0]))
+        self.register_buffer("weights", torch.tensor([2.0, 1.0, 3.0]))
         
     def forward(self, pred, target):
         return ((pred - target) ** 2 * self.weights).mean()
@@ -175,7 +175,7 @@ def main():
     criterion = WeightedMSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     
-    epochs = 60
+    epochs = 100
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
     
     best_val_loss = float('inf')

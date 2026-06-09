@@ -45,10 +45,12 @@ class DualSenseController:
     AXIS_R2 = 5       # Accel
 
     BTN_SQUARE = 0     # Upshift
-    BTN_CIRCLE = 1     # TOGGLE REGISTRAZIONE (Nuovo!)
+    BTN_CIRCLE = 1     # TOGGLE REGISTRAZIONE (DualSense / Circle)
     BTN_CROSS = 2      # Downshift
+    BTN_TRIANGLE = 3   # REC / Triangle
 
-    DEBOUNCE_MS = 250  
+    DEBOUNCE_MS = 200  # Millisecondi di debounce per i pulsanti del cambio
+    REC_DEBOUNCE_MS = 400  # Debounce più lungo per il tasto REC
 
     def __init__(self, steering_deadzone: float = 0.20):
         pygame.init()
@@ -62,25 +64,25 @@ class DualSenseController:
         print(f"  Controller inizializzato: {self.joystick.get_name()}")
 
         self.steering_deadzone = steering_deadzone
-        self.gear = 1  
+        self.gear = 1
         self.recording_active = True  # Stato di registrazione dinamico
 
         self._r2_initialized = False
         self._l2_initialized = False
         self._last_shift_time = 0
-        self._last_toggle_time = 0
+        self._last_rec_time = 0
+
+    def check_record_toggle(self) -> bool:
+        now = pygame.time.get_ticks()
+        if now - self._last_rec_time > self.REC_DEBOUNCE_MS:
+            if self.joystick.get_button(self.BTN_TRIANGLE) or self.joystick.get_button(self.BTN_CIRCLE):
+                self._last_rec_time = now
+                return True
+        return False
 
     def get_action(self) -> np.ndarray:
         pygame.event.clear()
         now = pygame.time.get_ticks()
-
-        # ── Toggle Registrazione ──
-        if now - self._last_toggle_time > self.DEBOUNCE_MS:
-            if self.joystick.get_button(self.BTN_CIRCLE):
-                self.recording_active = not self.recording_active
-                status = "ATTIVATA" if self.recording_active else "IN PAUSA"
-                print(f"\n  🎥 [REGISTRAZIONE] {status}")
-                self._last_toggle_time = now
 
         # ── Sterzo con deadzone ──
         raw_steer = -self.joystick.get_axis(self.AXIS_STEER)
@@ -120,7 +122,7 @@ class DualSenseController:
                     print(f"  [Gear] ⬆ Marcia {self.gear}")
                 self._last_shift_time = now
             elif self.joystick.get_button(self.BTN_CROSS):
-                if self.gear > 1:  
+                if self.gear > -1:  # Min gear -1 (retromarcia nella raccolta dati)
                     self.gear -= 1
                     print(f"  [Gear] ⬇ Marcia {self.gear}")
                 self._last_shift_time = now
@@ -137,6 +139,7 @@ class DualSenseController:
 class KeyboardController:
     """Gestisce la guida di TORCS tramite la tastiera (WASD + Frecce)."""
     DEBOUNCE_MS = 250
+    REC_DEBOUNCE_MS = 400
 
     def __init__(self):
         pygame.init()
@@ -147,8 +150,18 @@ class KeyboardController:
         self.steer_val = 0.0
         self.recording_active = True
         self._last_shift_time = 0
-        self._last_toggle_time = 0
-        print("  [Keyboard] MANTIENI IL FOCUS sulla finestra nera per guidare!")
+        self._last_rec_time = 0
+        print("  [Keyboard] Inizializzato. MANTIENI IL FOCUS sulla finestra nera 'Input Focus' per guidare!")
+
+    # [NUOVO METODO]
+    def check_record_toggle(self) -> bool:
+        now = pygame.time.get_ticks()
+        keys = pygame.key.get_pressed()
+        if now - self._last_rec_time > self.REC_DEBOUNCE_MS:
+            if keys[pygame.K_r]:
+                self._last_rec_time = now
+                return True
+        return False
 
     def rumble(self, intensity: float = 0.3, duration_ms: int = 180):
         pass
@@ -161,14 +174,6 @@ class KeyboardController:
 
         keys = pygame.key.get_pressed()
         now = pygame.time.get_ticks()
-
-        # ── Toggle Registrazione ──
-        if now - self._last_toggle_time > self.DEBOUNCE_MS:
-            if keys[pygame.K_r]:
-                self.recording_active = not self.recording_active
-                status = "ATTIVATA" if self.recording_active else "IN PAUSA"
-                print(f"\n  🎥 [REGISTRAZIONE] {status}")
-                self._last_toggle_time = now
 
         # 1. Sterzo graduale
         steer_target = 0.0
@@ -197,7 +202,7 @@ class KeyboardController:
                     print(f"  [Gear] ⬆ Marcia {self.gear}")
                 self._last_shift_time = now
             elif keys[pygame.K_DOWN]:
-                if self.gear > 1:
+                if self.gear > -1:
                     self.gear -= 1
                     print(f"  [Gear] ⬇ Marcia {self.gear}")
                 self._last_shift_time = now
@@ -318,16 +323,53 @@ def compute_gear(speed_kmh: float, accel: float, rpm: float, current_gear: int, 
 #  Main Loop
 # ──────────────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="Data Collection TORCS")
-    parser.add_argument("--output_dir", type=str, default="train_set")
-    parser.add_argument("--device", type=str, choices=["controller", "keyboard"], default="controller")
-    parser.add_argument("--steering_deadzone", type=float, default=0.05)
-    parser.add_argument("--relaunch_every", type=int, default=10)
-    parser.add_argument("--tcs", action="store_true", default=True)
-    parser.add_argument("--tcs_slip", type=float, default=5.0)
-    parser.add_argument("--zones", type=str, default=None)
-    parser.add_argument("--segment_only", action="store_true")
-    parser.add_argument("--auto_gear", action="store_true")
+    parser = argparse.ArgumentParser(
+        description="Data Collection TORCS — Giro Secco con controller PS5"
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default="train_set",
+        help="Directory di output per i file HDF5 e il log (default: directory corrente)"
+    )
+    parser.add_argument(
+        "--device", type=str, choices=["controller", "keyboard"], default="controller",
+        help="Dispositivo di input: 'controller' (PS5 DualSense) o 'keyboard' (tastiera WASD)"
+    )
+    parser.add_argument(
+        "--steering_deadzone", type=float, default=0.05,
+        help="Deadzone dello sterzo [0.0-0.2] (default: 0.05)"
+    )
+    parser.add_argument(
+        "--relaunch_every", type=int, default=10,
+        help="Rilancia TORCS ogni N giri per prevenire memory leak (default: 10)"
+    )
+    parser.add_argument(
+        "--tcs", action="store_true", default=True,
+        help="Abilita il Traction Control System (default: abilitato)"
+    )
+    parser.add_argument(
+        "--no-tcs", dest="tcs", action="store_false",
+        help="Disabilita il Traction Control System"
+    )
+    parser.add_argument(
+        "--tcs_slip", type=float, default=5.0,
+        help="Soglia di slip del TCS (default: 5.0)"
+    )
+    parser.add_argument(
+        "--zones", type=str, default=None,
+        help="Zone curva target (distFromStart in metri) come 'a:b,c:d'. Default: PROBLEM_ZONES auto-rilevate per geometria."
+    )
+    parser.add_argument(
+        "--segment_only", action="store_true",
+        help="Salva SOLO i segmenti dentro le zone (raccolta parziale): guidi giri interi, vengono tenute solo le curve strette."
+    )
+    parser.add_argument(
+        "--auto_gear", action="store_true",
+        help="Abilita il cambio automatico deterministico (ignora l'input manuale delle marce)"
+    )
+    parser.add_argument(
+        "--recovery", action="store_true",
+        help="Modalità recupero: parte con REC in pausa e non penalizza i fuori pista."
+    )
     args = parser.parse_args()
 
     sys.argv = [sys.argv[0]]
@@ -380,10 +422,19 @@ def main():
             steps_since_shift = 0
             step = 0
 
+            controller.recording_active = not args.recovery
             print(f"\n🚀 TENTATIVO GIRO #{lap_attempt} (Salvati: {lap_counter})")
+            print(f"   Registrazione iniziale: {'ATTIVATA' if controller.recording_active else 'IN PAUSA'}")
 
             while True:
                 step += 1
+
+                if controller.check_record_toggle():
+                    controller.recording_active = not controller.recording_active
+                    status = "🔴 REC ATTIVO" if controller.recording_active else "⏸️ REC IN PAUSA"
+                    print(f"\n  [MANUAL REC] {status}")
+                    controller.rumble(intensity=0.8, duration_ms=250)
+
                 action = controller.get_action()
 
                 if args.tcs:
@@ -418,7 +469,6 @@ def main():
                 done = env.client.R.d.get('meta', 0) == 1
                 next_state_vec = flatten_state(ob_next)
 
-                # ── SALVATAGGIO CONDIZIONATO DAL TOGGLE ──
                 if controller.recording_active:
                     lap_states.append(state_vec.copy())
                     lap_actions.append(action.copy())
@@ -431,11 +481,21 @@ def main():
                 current_track_pos = ob_next.get('trackPos', 0.0)
                 if isinstance(current_track_pos, np.ndarray):
                     current_track_pos = current_track_pos.flat[0]
-                
+
+                # Usiamo 1.5 come limite per permettere una guida più aggressiva sui cordoli.
                 if abs(current_track_pos) > 1.5:
-                    went_off_track, lap_completed, lap_valid = True, True, False
-                    force_relaunch = True
-                    break
+                    if not args.recovery:
+                        # Comportamento normale: fallimento e riavvio
+                        print(f"\n  ❌ [OFF-TRACK] trackPos: {current_track_pos:.2f} - Riavvio immediato simulazione.")
+                        went_off_track = True
+                        lap_completed = True
+                        lap_valid = False
+                        force_relaunch = True
+                        break
+                    else:
+                        # In modalità recovery, ignora l'errore e continua a farci guidare
+                        if step % 50 == 0:
+                            print(f"  ⚠️ [RECOVERY] Sei molto fuori pista, ma continuo... (trackPos: {current_track_pos:.2f})", end='\r')
 
                 current_last_lap = _get_last_lap_time(ob_next)
                 current_cur_lap = _get_cur_lap_time(ob_next)
@@ -446,9 +506,11 @@ def main():
                     controller.rumble(0.3, 180)
                 active_zone_idx = cur_zone
 
-                if step % 50 == 0:
-                    rec_status = "🔴 REC" if controller.recording_active else "⏸️ PAUSE"
-                    print(f"    [{rec_status}] Step {step:4d} | Time: {current_cur_lap:5.1f}s | Dist: {current_dist:6.1f}m", end='\r')
+                # Log ogni secondo circa (50 step) — indicatore zona (solo mentre registra)
+                if controller.recording_active and step % 50 == 0:
+                    zone_tag = "  🎯 ZONA TARGET" if cur_zone is not None else ""
+                    saved_steps = len(lap_states)
+                    print(f"    🔴 [REC Steps: {saved_steps:4d}] CurTime: {current_cur_lap:6.2f} | Dist: {current_dist:7.1f}{zone_tag}       ", end='\r')
 
                 if current_last_lap > 0.0 and abs(current_last_lap - prev_last_lap_time) > 0.0001:
                     lap_completed = True

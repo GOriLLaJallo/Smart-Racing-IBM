@@ -60,8 +60,10 @@ class DualSenseController:
     # Button mapping
     BTN_CROSS = 2      # Downshift
     BTN_SQUARE = 0     # Upshift
+    BTN_TRIANGLE = 3   # [NUOVO] Tasto REC (Spesso è il 3, su alcuni driver è il 4)
 
     DEBOUNCE_MS = 200  # Millisecondi di debounce per i pulsanti del cambio
+    REC_DEBOUNCE_MS = 400 # Debounce più lungo per il tasto REC
 
     def __init__(self, steering_deadzone: float = 0.20):
         pygame.init()
@@ -83,6 +85,16 @@ class DualSenseController:
 
         # Timestamp dell'ultimo cambio marcia (debounce)
         self._last_shift_time = 0
+        self._last_rec_time = 0 # [NUOVO] Timer per il tasto REC
+
+    # [NUOVO METODO] Controlla se hai premuto il tasto REC
+    def check_record_toggle(self) -> bool:
+        now = pygame.time.get_ticks()
+        if now - self._last_rec_time > self.REC_DEBOUNCE_MS:
+            if self.joystick.get_button(self.BTN_TRIANGLE):
+                self._last_rec_time = now
+                return True
+        return False
 
     def get_action(self) -> np.ndarray:
         """Legge controller e ritorna [steering, accel, brake, gear] come float32."""
@@ -129,7 +141,7 @@ class DualSenseController:
                     print(f"  [Gear] ⬆ Marcia {self.gear}")
                 self._last_shift_time = now
             elif self.joystick.get_button(self.BTN_CROSS):
-                if self.gear > 1:  # Min gear 1 (niente retromarcia nella raccolta dati)
+                if self.gear > -1:  # Min gear -1 (retromarcia nella raccolta dati)
                     self.gear -= 1
                     print(f"  [Gear] ⬇ Marcia {self.gear}")
                 self._last_shift_time = now
@@ -160,7 +172,18 @@ class KeyboardController:
         self.gear = 1
         self.steer_val = 0.0
         self._last_shift_time = 0
+        self._last_rec_time = 0
         print("  [Keyboard] Inizializzato. MANTIENI IL FOCUS sulla finestra nera 'Input Focus' per guidare!")
+
+    # [NUOVO METODO]
+    def check_record_toggle(self) -> bool:
+        now = pygame.time.get_ticks()
+        keys = pygame.key.get_pressed()
+        if now - self._last_rec_time > self.REC_DEBOUNCE_MS:
+            if keys[pygame.K_r]:
+                self._last_rec_time = now
+                return True
+        return False
 
     def rumble(self, intensity: float = 0.3, duration_ms: int = 180):
         """No-op: la tastiera non ha feedback aptico."""
@@ -205,7 +228,7 @@ class KeyboardController:
                     print(f"  [Gear] ⬆ Marcia {self.gear}")
                 self._last_shift_time = now
             elif keys[pygame.K_DOWN]:
-                if self.gear > 1:
+                if self.gear > -1:
                     self.gear -= 1
                     print(f"  [Gear] ⬇ Marcia {self.gear}")
                 self._last_shift_time = now
@@ -463,6 +486,10 @@ def main():
         "--auto_gear", action="store_true",
         help="Abilita il cambio automatico deterministico (ignora l'input manuale delle marce)"
     )
+    parser.add_argument(
+        "--recovery", action="store_true",
+        help="Modalità recupero: parte con REC in pausa e non penalizza i fuori pista."
+    )
     args = parser.parse_args()
 
     # ── Sanitizza sys.argv per evitare conflitti con getopt di snakeoil3 ──
@@ -571,9 +598,18 @@ def main():
 
             step = 0
 
+            # [NUOVO] Imposta lo stato iniziale del REC
+            is_recording = not args.recovery
+
             while True:
                 loop_start = time.perf_counter()
                 step += 1
+
+                if controller.check_record_toggle():
+                    is_recording = not is_recording
+                    stato = "🔴 REC ATTIVO" if is_recording else "⏸️ REC IN PAUSA"
+                    print(f"\n  [MANUAL REC] {stato}")
+                    controller.rumble(intensity=0.8, duration_ms=250) # Vibrazione forte di conferma
 
                 # ── Poll controller ──
                 action = controller.get_action()
@@ -627,11 +663,11 @@ def main():
                 
                 next_state_vec = flatten_state(ob_next)
 
-                # ── Accumula in RAM ──
-                # state_vec corrisponde a 'ob' (pre-step) → registro la sua distFromStart
-                lap_states.append(state_vec.copy())
-                lap_actions.append(action.copy())
-                lap_dists.append(_get_dist_from_start(ob))
+                # ── Accumula in RAM SOLO SE is_recording è True ──
+                if is_recording:
+                    lap_states.append(state_vec.copy())
+                    lap_actions.append(action.copy())
+                    lap_dists.append(_get_dist_from_start(ob))
 
                 state_vec = next_state_vec
                 ob = ob_next
@@ -641,15 +677,21 @@ def main():
                 if isinstance(current_track_pos, np.ndarray):
                     current_track_pos = current_track_pos.flat[0]
                 
-                # Usiamo 1.25 come limite per permettere una guida più aggressiva sui cordoli.
+                # Usiamo 1.5 come limite per permettere una guida più aggressiva sui cordoli.
                 if abs(current_track_pos) > 1.5:
-                    print(f"\n  ❌ [OFF-TRACK] trackPos: {current_track_pos:.2f} - Riavvio immediato simulazione.")
-                    went_off_track = True
-                    lap_completed = True
-                    lap_valid = False
-                    invalidation_reason = f"Fuori pista (trackPos: {current_track_pos:.2f})"
-                    force_relaunch = True
-                    break
+                    if not args.recovery:
+                        # Comportamento normale: fallimento e riavvio
+                        print(f"\n  ❌ [OFF-TRACK] trackPos: {current_track_pos:.2f} - Riavvio immediato simulazione.")
+                        went_off_track = True
+                        lap_completed = True
+                        lap_valid = False
+                        invalidation_reason = f"Fuori pista (trackPos: {current_track_pos:.2f})"
+                        force_relaunch = True
+                        break
+                    else:
+                        # In modalità recovery, ignora l'errore e continua a farci guidare
+                        if step % 50 == 0:
+                            print(f"  ⚠️ [RECOVERY] Sei molto fuori pista, ma continuo... (trackPos: {current_track_pos:.2f})", end='\r')
 
                 # ── Rilevamento completamento giro ──
                 current_last_lap = _get_last_lap_time(ob_next)
@@ -662,10 +704,12 @@ def main():
                     controller.rumble(intensity=0.3, duration_ms=180)  # pulsazione gentile = "sei in curva target"
                 active_zone_idx = cur_zone
 
-                # Log ogni 2 secondi circa (100 step) — indicatore zona (solo per il record)
-                if step % 100 == 0:
+                # Log ogni secondo circa (50 step) — indicatore zona (solo mentre registra)
+                if is_recording and step % 50 == 0:  # Abbassato a 50 per un aggiornamento più frequente (1 al sec)
                     zone_tag = "  🎯 ZONA TARGET" if cur_zone is not None else ""
-                    print(f"    [Step {step:4d}] CurTime: {current_cur_lap:6.2f} | LastLap: {current_last_lap:6.2f} | Dist: {current_dist:7.1f}{zone_tag} | OffTrack: {went_off_track}", end='\r')
+                    # Mostra quanti step sono stati effettivamente inseriti nel buffer di salvataggio
+                    saved_steps = len(lap_states) 
+                    print(f"    🔴 [REC Steps: {saved_steps:4d}] CurTime: {current_cur_lap:6.2f} | Dist: {current_dist:7.1f}{zone_tag}       ", end='\r')
 
                 # CONDIZIONE A: TORCS aggiorna il lastLapTime (Metodo primario e più affidabile)
                 if current_last_lap > 0.0 and abs(current_last_lap - prev_last_lap_time) > 0.0001:

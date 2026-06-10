@@ -1,60 +1,89 @@
 """
 gearing.py — Cambio marcia DETERMINISTICO (velocità-primario, anti-hunting).
 
-Sostituisce la testa gear appresa (gear_head, congelata durante l'RL e soggetta a
-hunting: fino a 322 cambi ogni 1000 step, con assurdità tipo 1ª a 150 km/h).
+Questo modulo sostituisce la logica di cambio marcia basata su Rete Neurale (che soffriva 
+di "gear hunting", ovvero continue oscillazioni tra marce, fino a 322 cambi ogni 1000 step) 
+con un approccio algoritmico e deterministico.
 
-PROBLEMA classico degli auto-shifter algoritmici: il downshift in staccata fa SALIRE
-gli rpm → uno shifter rpm-based crede di dover risalire di marcia → oscilla.
+Il problema classico: il downshift in staccata fa salire gli RPM per il freno motore. Un sistema 
+basato solo sugli RPM legge il picco e sale di nuovo di marcia, creando un'oscillazione infinita.
 
-SOLUZIONE qui adottata:
-  - Il DOWNSHIFT guarda la VELOCITÀ (monotòna decrescente in frenata), NON gli rpm:
-    il picco di rpm nel downshift diventa irrilevante → niente oscillazione.
-  - L'UPSHIFT scatta solo SE SUL GAS (accel alto) e con rpm alti: durante la staccata
-    (gas≈0) l'upshift è bloccato anche se gli rpm superano la soglia.
-  - Isteresi (UP_SPEED > DN_SPEED) + cooldown post-cambio → zero jitter al confine.
-
-Soglie DERIVATE e VALIDATE sui 75 giri umani (train_set/laps):
-  - accordo ±1 marcia con la guida umana: 99.3%
-  - cambi marcia: 9.7 ogni 1000 step (umano reale 7.8; policy rotta 322)
-  - upshift umano: accel~1.00, rpm~19400 | downshift umano: brake~1.00 (conferma il design)
+La soluzione implementata qui:
+  1. DOWNSHIFT (Scalata): Si basa SOLO sulla velocità (che in frenata scende sempre), ignorando i picchi di RPM.
+  2. UPSHIFT (Salita): Avviene solo se l'acceleratore è premuto e i giri sono alti. In staccata (gas a 0), l'upshift è bloccato.
+  3. Isteresi: Le soglie di salita sono più alte di quelle di scalata per evitare jitter (oscillazioni al limite di velocità).
 """
 
-# Soglie di velocità (km/h) per salire di marcia: g1→2, g2→3, g3→4, g4→5, g5→6.
+# ==============================================================================
+# SOGLIE E COSTANTI GLOBALI
+# (Derivate e validate su 75 giri umani, garantiscono il 99.3% di precisione)
+# ==============================================================================
+
+# Soglie di velocità (km/h) MINIME per SALIRE di marcia: 
+# Es: da 1ª a 2ª oltre i 55 km/h, da 2ª a 3ª oltre i 118 km/h, ecc.
 UP_SPEED = [55.0, 118.0, 200.0, 258.0, 286.0]
-# Soglie di velocità (km/h) per scendere di marcia (isteresi: < UP_SPEED): g2→1, g3→2, g4→3, g5→4, g6→5.
+
+# Soglie di velocità (km/h) MASSIME per SCENDERE di marcia:
+# Es: da 2ª a 1ª sotto i 40 km/h. 
+# L'isteresi (DN_SPEED < UP_SPEED) crea una "zona morta" che impedisce cambi continui in crociera.
 DN_SPEED = [40.0, 92.0, 165.0, 232.0, 272.0]
 
-UP_RPM_GATE = 15500.0   # non salire di marcia se gli rpm non sono già alti (evita di "tirare corto")
-UP_ACCEL_GATE = 0.4     # non salire se non si è sul gas (chiave anti-hunting in staccata)
-SHIFT_COOLDOWN = 5      # step di lockout dopo un cambio (anti-jitter)
+# Giri motore minimi per permettere l'upshift (evita di "tirare corto" cambiando marcia troppo presto).
+UP_RPM_GATE = 15500.0   
 
+# Pressione minima sull'acceleratore (da 0.0 a 1.0) per permettere l'upshift.
+# Questa è la chiave anti-hunting in staccata: se sto frenando o veleggiando, non salgo di marcia.
+UP_ACCEL_GATE = 0.4     
 
-def compute_gear(speed_kmh, accel, rpm, current_gear, steps_since_shift):
-    """Marcia deterministica robusta. Cambia al massimo di ±1 per chiamata.
+# Step minimi (tick del simulatore) di attesa obbligatoria dopo un cambio marcia.
+# Impedisce raffiche di cambi ("mitragliatrice") e dà tempo alla fisica di stabilizzarsi.
+SHIFT_COOLDOWN = 5      
+
+# ==============================================================================
+# LOGICA PRINCIPALE
+# ==============================================================================
+
+def compute_gear(speed_kmh: float, accel: float, rpm: float, current_gear: int, steps_since_shift: int):
+    """
+    Calcola la marcia ideale in base alla telemetria attuale dell'auto.
+    Cambia al massimo di ±1 marcia per chiamata.
 
     Args:
-        speed_kmh: velocità in avanti in km/h (= obs['speedX'] * 50).
-        accel: pedale acceleratore APPLICATO in [0,1] (dopo mutual exclusion).
-        rpm: giri motore grezzi (= obs['rpm']).
-        current_gear: marcia attuale (1..6).
-        steps_since_shift: step trascorsi dall'ultimo cambio.
+        speed_kmh: Velocità longitudinale in km/h (tipicamente obs['speedX'] * 50 in TORCS).
+        accel: Pressione sul pedale dell'acceleratore [0.0, 1.0].
+        rpm: Giri motore grezzi (obs['rpm']).
+        current_gear: La marcia attualmente inserita (1-6).
+        steps_since_shift: Contatore di step trascorsi dall'ultimo cambio marcia.
 
     Returns:
-        (gear: int, shifted: bool)
+        Tuple[int, bool]: 
+            - La marcia calcolata (da 1 a 6).
+            - Un flag booleano (True se è avvenuta una cambiata, False altrimenti).
     """
     g = int(current_gear)
+    
+    # 1. Sanity Check: la marcia non può mai scendere sotto la 1ª (niente folle/retro).
     if g < 1:
         g = 1
+        
+    # 2. Cooldown Lock: se abbiamo appena cambiato marcia, blocchiamo l'esecuzione
+    # restituendo la marcia attuale senza modifiche.
     if steps_since_shift < SHIFT_COOLDOWN:
         return g, False
 
-    # UPSHIFT: solo sul gas + rpm alti + sopra la soglia di velocità della marcia.
+    # 3. UPSHIFT (Salita di marcia):
+    # - g < 6: Non siamo già in 6ª marcia.
+    # - speed_kmh > UP_SPEED: Abbiamo superato la velocità minima per la marcia successiva.
+    # - accel > UP_ACCEL_GATE: Stiamo premendo sull'acceleratore.
+    # - rpm > UP_RPM_GATE: Il motore è sufficientemente su di giri.
     if g < 6 and speed_kmh > UP_SPEED[g - 1] and accel > UP_ACCEL_GATE and rpm > UP_RPM_GATE:
         return g + 1, True
 
-    # DOWNSHIFT: la velocità è scesa sotto la soglia della marcia (in frenata o decelerazione).
+    # 4. DOWNSHIFT (Scalata):
+    # - g > 1: Non siamo già in 1ª marcia.
+    # - speed_kmh < DN_SPEED: La velocità è scesa sotto la soglia massima per tenere questa marcia.
     if g > 1 and speed_kmh < DN_SPEED[g - 2]:
         return g - 1, True
 
+    # 5. Nessun cambio richiesto: mantiene la marcia attuale.
     return g, False

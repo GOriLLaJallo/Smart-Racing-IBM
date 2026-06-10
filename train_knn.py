@@ -1,7 +1,7 @@
 """
 Training Pipeline — KNN Regressor per TORCS (Corkscrew Optimized)
 
-Questo script si occupa di addestrare il "cervello" del nostro pilota automatico basato 
+Questo script si occupa di addestrare il "cervello" del pilota automatico basato 
 sull'algoritmo K-Nearest Neighbors (KNN). 
 A differenza delle Reti Neurali classiche che cercano di approssimare una funzione matematica complessa, 
 il KNN "memorizza" l'intero dataset di guida umana. Durante la gara (Inference), il modello confronterà 
@@ -80,7 +80,7 @@ def main():
     # 2. SELEZIONE E RIDUZIONE DELLE FEATURE (FEATURE ENGINEERING)
     # =========================================================================
     # Il dataset grezzo aveva 29 variabili, incluse velocità delle ruote e RPM.
-    # Qui tagliamo le ultime 7 colonne tenendo solo le prime 22:
+    # Tagliamo le ultime 7 colonne tenendo solo le prime 22:
     # - Indice 0: angle (Angolo della vettura rispetto all'asse della pista)
     # - Indici 1..19: track (I 19 telemetri laser che misurano la distanza dai bordi pista)
     # - Indice 20: trackPos (Posizione dell'auto da -1 a 1, dove 0 è il centro esatto)

@@ -1,5 +1,5 @@
 """
-Data Collection — Giro Secco TORCS (Human-in-the-Loop)
+Data Collection — Giro Secco TORCS
 
 Registra singoli giri con partenza da fermo usando un controller PS5 DualSense o Tastiera.
 Ogni giro viene validato (nessuna uscita di pista + lap time registrato).
@@ -17,6 +17,9 @@ import numpy as np
 import h5py
 import pygame
 from datetime import datetime
+
+# Importa la logica del cambio dal modulo esterno centralizzato
+from gearing import compute_gear
 
 # ==============================================================================
 # CONFIGURAZIONE INIZIALE
@@ -121,6 +124,7 @@ class DualSenseController:
                 self._l2_initialized = True
             brake = 0.0
         else:
+            # Mappa l'asse [-1, 1] al range [0, 1]
             brake = max(0.0, (raw_l2 + 1.0) / 2.0)
             if brake < 0.05: brake = 0.0
 
@@ -326,32 +330,6 @@ def apply_tcs(action: np.ndarray, obs: dict, slip_threshold: float = 5.0) -> np.
     return action
 
 # ==============================================================================
-# LOGICA DI CAMBIO AUTOMATICO (ANTI-HUNTING)
-# ==============================================================================
-
-# Soglie di velocità (km/h) ottimali per salire o scendere di marcia
-UP_SPEED = [55.0, 118.0, 200.0, 258.0, 286.0]
-DN_SPEED = [40.0, 92.0, 165.0, 232.0, 272.0]
-UP_RPM_GATE = 15500.0   # Cambia marcia solo se il motore sta urlando (alto numero di giri)
-UP_ACCEL_GATE = 0.4     # Cambia in su solo se si sta effettivamente premendo sull'acceleratore
-SHIFT_COOLDOWN = 5      # Steps minimi di attesa tra un cambio e l'altro per evitare cambiate "mitragliatrice"
-
-def compute_gear(speed_kmh: float, accel: float, rpm: float, current_gear: int, steps_since_shift: int):
-    """Calcola la marcia ideale in base alla telemetria dell'auto, restituendo anche un flag se è avvenuta una cambiata."""
-    g = int(current_gear)
-    if g < 1: g = 1
-    if steps_since_shift < SHIFT_COOLDOWN: return g, False
-
-    # Condizioni di Shift UP
-    if g < 6 and speed_kmh > UP_SPEED[g - 1] and accel > UP_ACCEL_GATE and rpm > UP_RPM_GATE:
-        return g + 1, True
-    # Condizioni di Shift DOWN
-    if g > 1 and speed_kmh < DN_SPEED[g - 2]:
-        return g - 1, True
-        
-    return g, False
-
-# ==============================================================================
 # LOOP PRINCIPALE DI RACCOLTA DATI
 # ==============================================================================
 
@@ -445,7 +423,7 @@ def main():
                 if args.auto_gear:
                     speed_x_raw = ob.get('speedX', 0.0)
                     speed_x_val = float(speed_x_raw.flat[0]) if isinstance(speed_x_raw, np.ndarray) else float(speed_x_raw)
-                    speed_kmh = speed_x_val * 50.0  # TORCS esporta la velocità in m/s circa (oppure con una scala da correggere * 50)
+                    speed_kmh = speed_x_val * 1  #Abbiamo letto la velocità non filtrata da gymtorcs, quindi non divisa per 50
                     
                     rpm_raw = ob.get('rpm', 0.0)
                     rpm_val = float(rpm_raw.flat[0]) if isinstance(rpm_raw, np.ndarray) else float(rpm_raw)
@@ -539,7 +517,7 @@ def main():
                 actions_np = np.stack(lap_actions)
                 dists_np = np.asarray(lap_dists, dtype=np.float32)
 
-                # Funzione interna per salvare il file HDF5 compresso (risparmia tantissimo spazio su disco)
+                # Funzione interna per salvare il file HDF5 compresso (risparmia spazio su disco)
                 def _write_h5(path, st, ac, di):
                     with h5py.File(path, 'w') as h5f:
                         h5f.create_dataset('states', data=st, compression="gzip")

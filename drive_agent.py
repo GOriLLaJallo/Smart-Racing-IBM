@@ -1,13 +1,13 @@
 """
 Inference Pipeline — KNN Autonomous Driving Agent per TORCS (Corkscrew Optimized)
 
-Questo script rappresenta il "pilota in gara".
+Questo script rappresenta il "pilota".
 Prende i file generati dalla fase di addestramento (modello KNN, Scaler e Pesi) e li 
 utilizza per guidare autonomamente l'auto all'interno del simulatore TORCS.
 
 Include il fix speciale "Blind Crest Override": un freno di emergenza automatico 
 programmato sulla staccata cieca del Cavatappi (Corkscrew). Questo è necessario perché i 
-sensori laser del gioco sparano dritti: in presenza di un dosso cieco, leggono il cielo 
+sensori laser del gioco puntano dritti: in presenza di un dosso cieco, leggono il cielo 
 (distanza infinita) invece della curva, ingannando l'algoritmo.
 """
 
@@ -34,7 +34,7 @@ except ImportError as e:
     print(f"Dettagli errore: {e}")
     sys.exit(1)
 
-# Importiamo le funzioni di utilità che abbiamo già scritto e validato nei moduli precedenti:
+# Importa le funzioni di utilità già scritte e validate nei moduli precedenti:
 # - flatten_state: per appiattire e normalizzare la telemetria grezza.
 # - apply_tcs: per il controllo di trazione in uscita di curva.
 # - compute_gear: per la gestione del cambio anti-hunting.
@@ -45,7 +45,7 @@ def main():
     # ==============================================================================
     # 1. VERIFICA E CARICAMENTO DEGLI ARTEFATTI
     # ==============================================================================
-    # Definiamo i percorsi dei file generati dallo script train_knn.py.
+    # Definisce i percorsi dei file generati dallo script train_knn.py.
     MODEL_PATH = "knn_corkscrew_model.pkl"
     SCALER_PATH = "knn_scaler.pkl"
     WEIGHTS_PATH = "knn_custom_weights.npy"
@@ -57,7 +57,7 @@ def main():
         return
 
     print("🧠 Caricamento del cervello KNN e delle pipeline di normalizzazione...")
-    # Ricostruiamo in memoria gli oggetti scikit-learn e gli array numpy.
+    # Ricostruisce in memoria gli oggetti scikit-learn e gli array numpy.
     knn_agent = joblib.load(MODEL_PATH)
     scaler = joblib.load(SCALER_PATH)
     custom_weights = np.load(WEIGHTS_PATH)
@@ -67,7 +67,7 @@ def main():
     # 2. INIZIALIZZAZIONE DEL SIMULATORE TORCS
     # ==============================================================================
     print("🏎️  Connessione a TORCS Environment...")
-    # Avviamo l'ambiente indicando che vogliamo controllare gas e marce, ma non usiamo la visione ottica a pixel.
+    # Avvia l'ambiente indicando che vogliamo controllare gas e marce, ma non usiamo la visione ottica a pixel.
     env = TorcsEnv(vision=False, throttle=True, gear_change=True)
     
     lap_count = 0
@@ -113,7 +113,7 @@ def main():
                 predicted_actions = knn_agent.predict(state_weighted)[0]
                 
                 # --- D) FIX "BLIND CREST": OVERRIDE PER LA STACCATA CAVATAPPI ---
-                # Ricaviamo a quanti metri dalla linea di partenza ci troviamo.
+                # Ricava a quanti metri dalla linea di partenza ci troviamo.
                 dist_curr_raw = ob.get('distFromStart', 0.0)
                 dist_curr = float(dist_curr_raw.flat[0] if isinstance(dist_curr_raw, np.ndarray) else dist_curr_raw)
                 
@@ -123,12 +123,12 @@ def main():
                     accel = 0.0                          # OVERRIDE: Forza il rilascio totale del gas.
                     brake = 0.8                          # OVERRIDE: Forza una frenata di emergenza all'80%.
                 else:
-                    # Fuori dalla zona cieca, fidiamoci ciecamente delle decisioni del KNN.
+                    # Fuori dalla zona cieca, usa le azioni predette dal KNN senza modifiche.
                     steer = float(predicted_actions[0])
                     accel = float(predicted_actions[1])
                     brake = float(predicted_actions[2])
                 
-                # Assembliamo l'array di azione parziale (la marcia è provvisoria).
+                # Assembla l'array di azione parziale (la marcia è provvisoria).
                 action = np.array([steer, accel, brake, float(current_gear)], dtype=np.float32)
                 
                 # --- E) Sistemi Elettronici di Bordo ---
@@ -136,15 +136,15 @@ def main():
                 action = apply_tcs(action, ob, slip_threshold=5.0)
                 
                 # --- F) Cambio Automatico Deterministico ---
-                # Estraiamo la velocità e calcoliamola in km/h (* 50.0).
+                # Estrae la velocità.
                 speed_x_raw = ob.get('speedX', 0.0)
                 speed_x_val = float(speed_x_raw.flat[0]) if isinstance(speed_x_raw, np.ndarray) else float(speed_x_raw)
-                speed_kmh = speed_x_val * 50.0 
+                speed_kmh = speed_x_val * 1 #Abbiamo letto la velocità non filtrata da gymtorcs, quindi non divisa per 50 
                 
                 rpm_raw = ob.get('rpm', 0.0)
                 rpm_val = float(rpm_raw.flat[0]) if isinstance(rpm_raw, np.ndarray) else float(rpm_raw)
                 
-                # Chiediamo al modulo gearing.py la marcia ideale.
+                # Chiede al modulo gearing.py la marcia ideale.
                 new_gear, shifted = compute_gear(
                     speed_kmh=speed_kmh,
                     accel=action[1],
@@ -153,7 +153,7 @@ def main():
                     steps_since_shift=steps_since_shift
                 )
                 
-                # Aggiorniamo i contatori del cambio per prevenire inceppamenti.
+                # Aggiorna i contatori del cambio per prevenire inceppamenti.
                 if shifted:
                     current_gear = new_gear
                     steps_since_shift = 0
@@ -163,7 +163,7 @@ def main():
                 action[3] = float(current_gear)
                 
                 # --- G) Attuazione nel Simulatore ---
-                # Traduciamo l'array finale nel formato richiesto dal client di TORCS.
+                # Traduce l'array finale nel formato richiesto dal client di TORCS.
                 env.client.R.d['steer'] = action[0]
                 env.client.R.d['accel'] = action[1]
                 env.client.R.d['brake'] = action[2]
@@ -182,7 +182,7 @@ def main():
                 if isinstance(current_track_pos, np.ndarray):
                     current_track_pos = current_track_pos.flat[0]
                 
-                # Se l'auto esce completamente fuori dalla pista (> 1.5), interrompiamo per evitare logiche "bloccate nel muro".
+                # Se l'auto esce completamente fuori dalla pista (> 1.5), interrompe per evitare logiche "bloccate nel muro".
                 if abs(current_track_pos) > 1.5:
                     print(f"\n⚠️ [AGENTE OFF-TRACK] Auto uscita di pista (trackPos: {current_track_pos:.2f}). Riposizionamento...")
                     break 

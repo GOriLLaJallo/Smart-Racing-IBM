@@ -16,7 +16,6 @@ La soluzione implementata qui:
 
 # ==============================================================================
 # SOGLIE E COSTANTI GLOBALI
-# (Derivate e validate su 75 giri umani, garantiscono il 99.3% di precisione)
 # ==============================================================================
 
 # Soglie di velocità (km/h) MINIME per SALIRE di marcia: 

@@ -73,6 +73,7 @@ Particolare attenzione viene data a:
 * Velocità del veicolo
 * Posizione laterale in pista (*trackPos*)
 * Angolo rispetto alla direzione della pista
+* Distanza dai bordi della pista (*vettore track*)
 
 ---
 
@@ -135,9 +136,6 @@ Funzionalità:
 ```text
 smart_racing_ibm/
 │
-├── train_set/             # Dataset e telemetria in formato HDF5
-├── vtorcs-RL-color/       # Client TORCS modificato per RL
-│
 ├── data_collection.py     # Acquisizione dati e TCS
 ├── train_knn.py           # Training del modello
 ├── drive_agent.py         # Guida autonoma
@@ -156,7 +154,6 @@ smart_racing_ibm/
 
 * **OS:** Windows / Linux
 * **Python:** 3.8+
-* **Simulatore:** vtorcs-RL-color
 
 ---
 
@@ -168,7 +165,6 @@ h5py
 pygame
 scikit-learn
 joblib
-torch
 ```
 
 ### Utilizzo
@@ -180,7 +176,6 @@ torch
 | Pygame       | Acquisizione input      |
 | Scikit-Learn | Modello k-NN            |
 | Joblib       | Serializzazione         |
-| PyTorch      | Modelli sperimentali BC |
 
 ---
 

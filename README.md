@@ -1,4 +1,4 @@
-# AI TORCS Driver – Smart Racing IBM
+# 🏎️ Smart Racing IBM
 
 ## AI Driver basato su Machine Learning (k-NN) per TORCS
 
@@ -8,213 +8,326 @@
 
 Progetto sviluppato nell'ambito della **IBM AI Racing League** per la realizzazione di un agente di guida autonoma nel simulatore **TORCS (The Open Racing Car Simulator)**.
 
-*Smart Racing IBM* è un progetto di Intelligenza Artificiale Applicata e Guida Autonoma. Sfrutta il *Machine Learning* (algoritmo K-Nearest Neighbors) per insegnare a un agente virtuale a guidare in modo autonomo all'interno del simulatore di corse open-source *TORCS* (The Open Racing Car Simulator) in un circuito complesso (Laguna Seca) con l'obiettivo di minimizzare il tempo su un singolo giro partendo da fermo e massimizzando la stabilità.
+**Smart Racing IBM** è un progetto di **Intelligenza Artificiale Applicata** e **Guida Autonoma** che sfrutta il **Machine Learning** per insegnare a un agente virtuale a guidare autonomamente all'interno del simulatore open-source TORCS.
+
+L'obiettivo principale è:
+
+* 🏁 **Minimizzare il tempo sul giro**
+* 🚗 **Massimizzare la stabilità del veicolo**
+* 🎯 **Mantenere una traiettoria ottimale**
+* ⚡ **Gestire in modo efficiente accelerazione, frenata e sterzo**
+
+Il progetto è stato addestrato sul circuito **Laguna Seca**, utilizzando dati raccolti da sessioni di guida umana.
 
 ---
 
 ## 👥 Team
 
-* Menza William
-* Sostegno Vincenzo Nicola
-* Argenio Letizia
-* Amabile Emilia
-* Vitolo Teresa
+| Nome                     |             
+| ------------------------ | 
+| William Menza            | 
+| Vincenzo Nicola Sostegno | 
+| Letizia Argenio          | 
+| Emilia Amabile           | 
+| Teresa Vitolo            | 
 
 ---
 
-## 🚀 Architettura del Modello: K-Nearest Neighbors (k-NN)
+# 🚀 Architettura del Sistema
 
-Il cuore del progetto è un algoritmo puramente statistico e geometrico implementato tramite *scikit-learn*. L'agente confronta costantemente i sensori in tempo reale dell'auto con un database di migliaia di frame guidati da un umano, cercando le *k* situazioni storiche "più simili" per dedurre istantaneamente sterzo, freno e acceleratore.
+L'agente utilizza un approccio **Behavior Cloning tramite K-Nearest Neighbors (k-NN)** implementato con **scikit-learn**.
 
-Il sistema è composto da due componenti principali:
+Ad ogni istante il sistema confronta i sensori correnti dell'auto con migliaia di situazioni storiche registrate durante la guida umana, individuando gli esempi più simili e stimando le azioni da eseguire.
 
-### 1. Modulo di Machine Learning
+## Componenti Principali
+
+### 🧠 1. Modulo di Machine Learning
 
 Responsabile della previsione delle azioni di guida:
 
-* Sterzo (Steering)
-* Acceleratore (Throttle)
-* Freno (Brake)
+* Sterzo (**Steering**)
+* Acceleratore (**Throttle**)
+* Freno (**Brake**)
 
-### 2. Modulo Deterministico
+---
 
-Responsabile della gestione del cambio marcia:
+### ⚙️ 2. Modulo Deterministico
+
+Responsabile della gestione della trasmissione:
 
 * Selezione della marcia ottimale
 * Controllo delle soglie RPM
-* Isteresi anti oscillazione
+* Isteresi anti-oscillazione
+* Riduzione del fenomeno di *gear hunting*
 
 ---
 
-### ✨ Funzionalità Avanzate dell'Agente (drive_agent.py)
-* *Ponderazione dinamica dei sensori (Custom Weights):* Abbiamo applicato dei pesi dinamici personalizzati per la ricerca k-NN (knn_custom_weights.npy), istruendo l'algoritmo a dare altissima priorità alla modulazione della velocità, alla posizione laterale in pista (trackPos) e all'angolo dell'auto.
-* *Guardrail Virtuale:* L'agente include routine di sicurezza anti-uscita, correggendo automaticamente la traiettoria qualora un'imperfezione del modello lo portasse sull'erba.
-* *Cambio automatico intelligente:* separato dal modello di Machine Learning, implementato tramite logiche deterministiche e isteresi per evitare il fenomeno del gear hunting.
+## ✨ Funzionalità Avanzate dell'Agente (`drive_agent.py`)
+
+### 🎯 Ponderazione Dinamica dei Sensori
+
+L'agente utilizza una matrice di pesi personalizzati (`knn_custom_weights.npy`) per enfatizzare le feature più importanti durante la ricerca dei vicini.
+
+Particolare attenzione viene data a:
+
+* Velocità del veicolo
+* Posizione laterale in pista (*trackPos*)
+* Angolo rispetto alla direzione della pista
 
 ---
 
-### ⚙️ Moduli Condivisi
-* *gearing.py*: Un cambio automatico deterministico intelligente. Sostituisce le cambiate della rete neurale (soggette a "hunting" e micro-oscillazioni) con una logica a isteresi basata su velocità, giri motore e percentuale di accelerazione per garantire il 100% di affidabilità meccanica.
-* *data_collection.py*: Un sistema di acquisizione dati a 50Hz in formato HDF5. Legge gli input del controller PS5/Tastiera, integra un *Traction Control System (TCS) per limare gli errori umani, e scarta automaticamente i giri invalidati da tagli di curva.
+### 🛡️ Guardrail Virtuale
+
+Sistema di sicurezza integrato che monitora costantemente la posizione dell'auto.
+
+Quando il modello tende a portare il veicolo fuori pista:
+
+* vengono applicate correzioni automatiche;
+* viene favorita la riconvergenza verso il centro della carreggiata;
+* si riduce il rischio di perdita di controllo.
 
 ---
 
-## 📂 Struttura del Repository
+### 🔄 Cambio Automatico Intelligente
+
+Il cambio marcia è completamente separato dal modello di Machine Learning.
+
+Una logica deterministica basata su:
+
+* RPM motore
+* Velocità
+* Percentuale di acceleratore
+
+garantisce cambiate affidabili e prive di oscillazioni indesiderate.
+
+---
+
+## ⚙️ Moduli Condivisi
+
+### `gearing.py`
+
+Sistema di cambio automatico intelligente.
+
+Caratteristiche:
+
+* isteresi anti-oscillazione;
+* controllo RPM;
+* gestione affidabile delle cambiate;
+* eliminazione del *gear hunting*.
+
+---
+
+### `data_collection.py`
+
+Sistema di acquisizione dati ad alta frequenza (~50 Hz).
+
+Funzionalità:
+
+* acquisizione input PS5 Controller / Tastiera;
+* registrazione telemetria in formato HDF5;
+* integrazione di un **Traction Control System (TCS)**;
+* eliminazione automatica dei giri invalidati da tagli di curva.
+
+---
+
+# 📂 Struttura del Repository
 
 ```text
 smart_racing_ibm/
 │
 ├── train_set/             # Dataset e telemetria in formato HDF5
-├── vtorcs-RL-color/       # Client del simulatore TORCS
+├── vtorcs-RL-color/       # Client TORCS modificato per RL
 │
 ├── data_collection.py     # Acquisizione dati e TCS
-├── train_knn.py           # Pipeline di training e generazione modello
-├── drive_agent.py         # Logica principale di guida autonoma
-├── gearing.py             # Gestione intelligente del cambio
+├── train_knn.py           # Training del modello
+├── drive_agent.py         # Guida autonoma
+├── gearing.py             # Cambio automatico intelligente
 ├── snakeoil3_gym.py       # Client UDP TORCS
-├── gym_torcs.py           # Wrapper ambiente Gym
+├── gym_torcs.py           # Wrapper OpenAI Gym
 │
 └── README.md
 ```
----
-
-## 🛠️ Requisiti di Sistema
-
-- *OS:* Windows / Linux (Testato in ambiente compatibile TORCS)
-- *Simulatore:* vtorcs-RL-color (TORCS con patch per Reinforcement Learning / UDP)
-- *Python:* 3.8+
-- *Librerie Principali:*
-  - numpy, h5py (Gestione dataset)
-  - pygame (Polling del controller PS5/Input)
-  - scikit-learn, joblib (Modello k-NN e Scaler)
-  - torch (PyTorch per la rete neurale BC)
 
 ---
 
-## 🔄 Pipeline di Machine Learning
+# 🛠️ Requisiti di Sistema
 
-L'intero workflow è composto da cinque fasi principali.
+## Ambiente
 
-### 1. Raccolta Dati
+* **OS:** Windows / Linux
+* **Python:** 3.8+
+* **Simulatore:** vtorcs-RL-color
+
+---
+
+## Librerie Principali
+
+```bash
+numpy
+h5py
+pygame
+scikit-learn
+joblib
+torch
+```
+
+### Utilizzo
+
+| Libreria     | Scopo                   |
+| ------------ | ----------------------- |
+| NumPy        | Elaborazione numerica   |
+| HDF5         | Gestione dataset        |
+| Pygame       | Acquisizione input      |
+| Scikit-Learn | Modello k-NN            |
+| Joblib       | Serializzazione         |
+| PyTorch      | Modelli sperimentali BC |
+
+---
+
+# 🔄 Pipeline di Machine Learning
+
+L'intero workflow è composto da cinque fasi.
+
+## 1️⃣ Raccolta Dati
 
 Attraverso `data_collection.py` vengono acquisiti:
 
-* Sensori di pista
-* Velocità
-* Angolo rispetto alla pista
-* Posizione relativa
+* Track Sensors
+* Speed X
+* Angle
+* Track Position
 * Input del pilota
 
-La raccolta avviene a circa **50 Hz**.
+Frequenza di acquisizione:
+
+> **≈ 50 Hz**
 
 ---
 
-### 2. Preprocessing
+## 2️⃣ Preprocessing
 
-I dati vengono:
+Operazioni eseguite:
 
-* Normalizzati tramite **StandardScaler (Z-Score)**
-* Filtrati
-* Pesati mediante una matrice di **Custom Weights**
+* Normalizzazione tramite **StandardScaler**
+* Filtraggio dei dati
+* Applicazione dei **Custom Weights**
 
-L'obiettivo è enfatizzare le feature più importanti per il controllo della traiettoria.
+Obiettivo:
+
+> dare maggiore importanza alle feature più rilevanti per il controllo della traiettoria.
 
 ---
 
-### 3. Training
+## 3️⃣ Training
 
 Durante questa fase:
 
-1. Vengono caricati i dataset validati.
-2. Si applica la normalizzazione.
-3. Viene addestrato il modello k-NN.
+1. Caricamento dei dataset validati.
+2. Normalizzazione delle feature.
+3. Addestramento del modello k-NN.
+4. Validazione delle prestazioni.
 
 ---
 
-### 4. Export
+## 4️⃣ Export
 
-Il modello viene serializzato tramite:
+Artefatti generati:
 
-* `.pkl` per il modello KNN
-* `.npy` per i pesi personalizzati
-* scaler serializzato tramite Joblib
+| File   | Descrizione         |
+| ------ | ------------------- |
+| `.pkl` | Modello k-NN        |
+| `.npy` | Pesi personalizzati |
+| Joblib | Scaler normalizzato |
 
 ---
 
-### 5. Inferenza
+## 5️⃣ Inferenza
 
 Durante la guida autonoma:
 
-1. Viene acquisito lo stato corrente del veicolo.
-2. I dati vengono normalizzati.
-3. Si applicano i custom weights.
-4. Il modello ricerca i **5 vicini più simili**.
-5. Viene prodotta la previsione delle azioni.
+1. Acquisizione dello stato corrente.
+2. Normalizzazione delle feature.
+3. Applicazione dei custom weights.
+4. Ricerca dei **5 vicini più simili**.
+5. Predizione dell'azione ottimale.
 
 ---
 
-## 🧠 Modello k-NN
+# 🧠 Modello k-NN
 
-### Tipo
+## Tipo
 
-Instance-Based Learning
+**Instance-Based Learning**
 
-### Algoritmo
+---
 
-K-Nearest Neighbors Regressor
+## Algoritmo
 
-### Input
+**K-Nearest Neighbors Regressor**
 
-Feature provenienti dalla telemetria TORCS:
+---
+
+## Input
+
+Feature telemetriche provenienti da TORCS:
 
 * Track Sensors
 * Angle
 * Track Position
 * Speed X
 
-### Output
+---
+
+## Output
 
 * Steering
 * Acceleration
 * Brake
 
-### Parametri principali
+---
+
+## Parametri Principali
 
 ```python
 n_neighbors = 5
 weights = "distance"
 ```
 
-Il cambio marcia è escluso dal modello e viene gestito separatamente.
+> Il cambio marcia non viene predetto dal modello ma è gestito separatamente dal modulo deterministico.
 
 ---
 
-## 📈 Prestazioni
+# 📈 Prestazioni
 
-Caratteristiche osservate durante i test:
+Durante i test l'agente ha mostrato:
 
-* guida fluida e stabile;
-* buona generalizzazione sui circuiti addestrati;
-* tempi sul giro competitivi;
-* elevata robustezza nelle sezioni tecnicamente difficili.
+* ✅ guida fluida e stabile;
+* ✅ buona generalizzazione sui circuiti addestrati;
+* ✅ tempi sul giro competitivi;
+* ✅ elevata robustezza nelle sezioni tecnicamente più difficili;
+* ✅ comportamento coerente anche in presenza di piccole deviazioni dalla traiettoria ideale.
 
 ---
 
-## 🚀 Esecuzione
+# 🚀 Esecuzione
 
-### Raccolta dati
+## Raccolta Dati
 
 ```bash
 python data_collection.py
 ```
 
-### Training del modello
+---
+
+## Training del Modello
 
 ```bash
 python train_knn.py
 ```
 
-### Avvio della guida autonoma
+---
+
+## Avvio della Guida Autonoma
 
 ```bash
 python drive_agent.py
@@ -222,7 +335,7 @@ python drive_agent.py
 
 ---
 
-## 📚 Riferimenti
+# 📚 Riferimenti
 
 * TORCS Official Documentation
 * Gym-TORCS
@@ -230,3 +343,11 @@ python drive_agent.py
 * IBM AI Racing League
 
 ---
+
+<div align="center">
+
+### 🏁 Smart Racing IBM
+
+Machine Learning • Autonomous Driving • TORCS • IBM AI Racing League
+
+</div>

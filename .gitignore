@@ -22,3 +22,10 @@ Thumbs.db
 
 # Motore di gioco TORCS
 vtorcs-RL-color/
+
+#training set
+train_set/
+
+# File post training
+*.pkl
+*.npy

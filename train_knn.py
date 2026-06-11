@@ -5,7 +5,7 @@ Questo script si occupa di addestrare il "cervello" del pilota automatico basato
 sull'algoritmo K-Nearest Neighbors (KNN). 
 A differenza delle Reti Neurali classiche che cercano di approssimare una funzione matematica complessa, 
 il KNN "memorizza" l'intero dataset di guida umana. Durante la gara (Inference), il modello confronterà 
-i dati dei sensori in tempo reale con il suo database, cercherà i 5 momenti (neighbors) matematicamente 
+i dati dei sensori in tempo reale con il suo database, cercherà i 5 (k) momenti (neighbors) matematicamente 
 più simili e ne farà una media per decidere come sterzare e accelerare.
 
 Fasi principali del flusso di lavoro:

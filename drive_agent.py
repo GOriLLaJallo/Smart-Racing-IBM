@@ -4,16 +4,10 @@ Inference Pipeline — KNN Autonomous Driving Agent per TORCS (Corkscrew Optimiz
 Questo script rappresenta il "pilota".
 Prende i file generati dalla fase di addestramento (modello KNN, Scaler e Pesi) e li 
 utilizza per guidare autonomamente l'auto all'interno del simulatore TORCS.
-
-Include il fix speciale "Blind Crest Override": un freno di emergenza automatico 
-programmato sulla staccata cieca del Cavatappi (Corkscrew). Questo è necessario perché i 
-sensori laser del gioco puntano dritti: in presenza di un dosso cieco, leggono il cielo 
-(distanza infinita) invece della curva, ingannando l'algoritmo.
 """
 
 import os
 import sys
-import time
 import numpy as np
 import joblib
 
@@ -112,11 +106,7 @@ def main():
                 # e calcola la media ponderata per sterzo, acceleratore e freno.
                 predicted_actions = knn_agent.predict(state_weighted)[0]
                 
-                # --- D) FIX "BLIND CREST": OVERRIDE PER LA STACCATA CAVATAPPI ---
-                # Ricava a quanti metri dalla linea di partenza ci troviamo.
-                dist_curr_raw = ob.get('distFromStart', 0.0)
-                dist_curr = float(dist_curr_raw.flat[0] if isinstance(dist_curr_raw, np.ndarray) else dist_curr_raw)
-
+                # --- D) Estrazione Azioni Predette e Smoothing ---
                 raw_steer = float(predicted_actions[0])
                 accel = float(predicted_actions[1])
                 brake = float(predicted_actions[2])
@@ -125,18 +115,10 @@ def main():
                 steer = (raw_steer * 0.8) + (last_steer * 0.2)
                 last_steer = steer  # Salva in memoria per il frame successivo
 
-                '''
-                # Zona di "cecità" sensoriale: tra i 1410 e i 1460 metri.
-                if 1410.0 <= dist_curr <= 1460.0:
-                    steer = float(predicted_actions[0])  # Mantieni lo sterzo del KNN per preparare la curva.
-                    accel = 0.0                          # OVERRIDE: Forza il rilascio totale del gas.
-                    brake = 0.8                          # OVERRIDE: Forza una frenata di emergenza all'80%.
-                else:
-                    # Fuori dalla zona cieca, usa le azioni predette dal KNN senza modifiche.
-                    steer = float(predicted_actions[0])
-                    accel = float(predicted_actions[1])
-                    brake = float(predicted_actions[2])
-                '''
+                # Ricava a quanti metri dalla linea di partenza ci troviamo (utile per il log a schermo).
+                dist_curr_raw = ob.get('distFromStart', 0.0)
+                dist_curr = float(dist_curr_raw.flat[0] if isinstance(dist_curr_raw, np.ndarray) else dist_curr_raw)
+
                 # ---------------------------------------------------------
                 # D.2) GUARDRAIL VIRTUALE (Safety Override)
                 # ---------------------------------------------------------
@@ -162,7 +144,6 @@ def main():
                     if step % 5 == 0:
                         print(f" 🛡️ GUARDRAIL ATTIVO! Pos: {track_pos:.2f} -> Correzione: {steer:.2f} ", end='\r')
                     
-                
                 # Assembla l'array di azione parziale (la marcia è provvisoria).
                 action = np.array([steer, accel, brake, float(current_gear)], dtype=np.float32)
                 
@@ -174,7 +155,7 @@ def main():
                 # Estrae la velocità.
                 speed_x_raw = ob.get('speedX', 0.0)
                 speed_x_val = float(speed_x_raw.flat[0]) if isinstance(speed_x_raw, np.ndarray) else float(speed_x_raw)
-                speed_kmh = speed_x_val * 1 #Abbiamo letto la velocità non filtrata da gymtorcs, quindi non divisa per 50 
+                speed_kmh = speed_x_val * 1 # Abbiamo letto la velocità non filtrata da gymtorcs, quindi non divisa per 50 
                 
                 rpm_raw = ob.get('rpm', 0.0)
                 rpm_val = float(rpm_raw.flat[0]) if isinstance(rpm_raw, np.ndarray) else float(rpm_raw)
@@ -225,7 +206,6 @@ def main():
                 # --- Feedback a schermo ---
                 # Stampiamo i dati principali ogni 50 step per non inondare la console.
                 if step % 50 == 0:
-                    #status_freno = "!! OVERRIDE FRENO !!" if 1410.0 <= dist_curr <= 1460.0 else ""
                     print(f"   [Step {step:4d} | {dist_curr:6.1f}m] Vel: {speed_kmh:5.1f} | Marcia: {current_gear} | RPM: {rpm_val:5.0f}", end='\r')
                 
                 # Prepara l'osservazione per il ciclo successivo.

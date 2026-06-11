@@ -1,6 +1,5 @@
-
-import gymnasium as gym
-from gymnasium import spaces
+import gym
+from gym import spaces
 import numpy as np
 # from os import path
 import snakeoil3_gym as snakeoil3
@@ -10,45 +9,8 @@ import collections as col
 import os
 import time
 
-# ======================================================================
-#  FUNZIONE TRASFERITA QUI PER EVITARE L'IMPORT CIRCOLARE
-# ======================================================================
-def flatten_state(state_dict: dict) -> np.ndarray:
-    def _scalar(key: str, default: float = 0.0) -> float:
-        val = state_dict.get(key, default)
-        if val is None:
-            return default
-        if isinstance(val, np.ndarray):
-            return float(val.flat[0])
-        return float(val)
 
-    def _array(key: str, size: int) -> np.ndarray:
-        val = state_dict.get(key, None)
-        if val is None:
-            return np.zeros(size, dtype=np.float32)
-        arr = np.array(val, dtype=np.float32).flatten()
-        if arr.shape[0] != size:
-            padded = np.zeros(size, dtype=np.float32)
-            padded[:min(size, arr.shape[0])] = arr[:min(size, arr.shape[0])]
-            return padded
-        return arr
-
-    try:
-        state_vec = np.concatenate([
-            np.array([_scalar('angle')]),
-            _array('track', 19),
-            np.array([_scalar('trackPos')]),
-            np.array([_scalar('speedX')]),
-            np.array([_scalar('speedY')]),
-            np.array([_scalar('speedZ')]),
-            _array('wheelSpinVel', 4) / 100.0,
-            np.array([_scalar('rpm') / 10000.0]),
-        ])
-        return state_vec.astype(np.float32)
-    except Exception:
-        return np.zeros(29, dtype=np.float32)
-
-class TorcsEnv(gym.Env):
+class TorcsEnv:
     terminal_judge_start = 500  # Speed limit is applied after this step
     termination_limit_progress = 5  # [km/h], episode terminates if car is running slower than this limit
     default_speed = 50
@@ -91,7 +53,9 @@ class TorcsEnv(gym.Env):
             self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,))
 
         if vision is False:
-            self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(29,), dtype=np.float32)
+            high = np.array([1., np.inf, np.inf, np.inf, 1., np.inf, 1., np.inf])
+            low = np.array([0., -np.inf, -np.inf, -np.inf, 0., -np.inf, 0., -np.inf])
+            self.observation_space = spaces.Box(low=low, high=high)
         else:
             high = np.array([1., np.inf, np.inf, np.inf, 1., np.inf, 1., np.inf, 255])
             low = np.array([0., -np.inf, -np.inf, -np.inf, 0., -np.inf, 0., -np.inf, 0])
@@ -129,15 +93,7 @@ class TorcsEnv(gym.Env):
                (client.S.d['wheelSpinVel'][0]+client.S.d['wheelSpinVel'][1]) > 5):
                 action_torcs['accel'] -= .2
         else:
-            # === NUOVA LOGICA MONOPEDALE (GAS/FRENO) ===
-            pedal_input = this_action['accel'] # Che ora va da -1.0 a +1.0
-            
-            if pedal_input > 0:
-                action_torcs['accel'] = pedal_input
-                action_torcs['brake'] = 0.0
-            else:
-                action_torcs['accel'] = 0.0
-                action_torcs['brake'] = abs(pedal_input)
+            action_torcs['accel'] = this_action['accel']
 
         #  Automatic Gear Change by Snakeoil
         if self.gear_change is True:
@@ -171,62 +127,32 @@ class TorcsEnv(gym.Env):
         obs = client.S.d
 
         # Make an obsevation from a raw observation vector from TORCS
-        self.observation = flatten_state(obs)
+        self.observation = self.make_observaton(obs)
 
         # Reward setting Here #######################################
+        # direction-dependent positive reward
         track = np.array(obs['track'])
         sp = np.array(obs['speedX'])
-        angle = obs['angle']
-        
-        # Recuperiamo la posizione e lo sterzo per le penalità avanzate
-        track_pos = obs['trackPos']
-        current_steer = action_torcs['steer']
-
-        # 1. PREMIO BASE (Progresso lungo la pista)
-        # Se vai dritto a 100 km/h, guadagni 100 punti. Se sbandi, il coseno riduce i punti.
-        progress = sp * np.cos(angle) 
+        progress = sp*np.cos(obs['angle'])
         reward = progress
 
-        # 2. PENALITÀ LATERALE (Permette la Traiettoria Ideale)
-        # La pista va da -1 a +1. Creiamo una "zona franca" sicura tra -0.8 e +0.8.
-        # L'auto è libera di allargarsi per impostare le curve.
-        MARGINE_SICURO = 0.8
-        
-        if abs(track_pos) > MARGINE_SICURO:
-            # Calcoliamo di quanto ha superato il margine sicuro (es. è a 0.9 -> invasione = 0.1)
-            invasione = abs(track_pos) - MARGINE_SICURO
-            # Punizione esponenziale in base alla velocità
-            eccentricity_penalty = (invasione ** 2) * (sp * 0.5)
-            reward -= eccentricity_penalty
-
-        # 3. PENALITÀ SMOOTHNESS (Niente sterzate a zig-zag)
-        # Scoraggia le sterzate violente ad alte velocità per stabilizzare la guida
-        steer_penalty = (abs(current_steer) ** 2) * (sp * 0.05)
-        reward -= steer_penalty
-
-        # 4. COLLISION DETECTION (Il Muro di Gomma)
+        # collision detection
         if obs['damage'] - obs_pre['damage'] > 0:
-            reward = -500.0  # PRIMA ERA -1. Ora è una punizione severissima.
+            reward = -1
 
         # Termination judgement #########################
         episode_terminate = False
-        
-        # 5. FUORI PISTA FATALE
-        if track.min() < 0:  
-            reward = -500.0  # PRIMA ERA -1.
+        if track.min() < 0:  # Episode is terminated if the car is out of track
+            reward = - 1
             episode_terminate = True
             client.R.d['meta'] = True
 
-        # 6. TROPPO LENTO O FERMO
-        if self.terminal_judge_start < self.time_step: 
+        if self.terminal_judge_start < self.time_step: # Episode terminates if the progress of agent is small
             if progress < self.termination_limit_progress:
-                reward = -50.0  # Punizione per essersi arreso/fermato
                 episode_terminate = True
                 client.R.d['meta'] = True
 
-        # 7. CONTROMANO
-        if np.cos(angle) < 0: 
-            reward = -500.0
+        if np.cos(obs['angle']) < 0: # Episode is terminated if the agent runs backward
             episode_terminate = True
             client.R.d['meta'] = True
 
@@ -237,11 +163,11 @@ class TorcsEnv(gym.Env):
 
         self.time_step += 1
 
-        return self.get_obs(), float(reward), bool(client.R.d['meta']), False, {}
+        return self.get_obs(), reward, client.R.d['meta'], {}
 
-    def reset(self, seed=None, options=None, relaunch=False, **kwargs):
-        super().reset(seed=seed)
-        
+    def reset(self, relaunch=False):
+        #print("Reset")
+
         self.time_step = 0
 
         if self.initial_reset is not True:
@@ -254,19 +180,20 @@ class TorcsEnv(gym.Env):
                 print("### TORCS is RELAUNCHED ###")
 
         # Modify here if you use multiple tracks in the environment
-        self.client = snakeoil3.Client(p=3001, vision=self.vision)  # Open new UDP in vtorcs
+        self.client = snakeoil3.Client(p=3101, vision=self.vision)  # Open new UDP in vtorcs
         self.client.MAX_STEPS = np.inf
 
         client = self.client
         client.get_servers_input()  # Get the initial input from torcs
 
         obs = client.S.d  # Get the current full-observation from torcs
-        self.observation = flatten_state(obs)
+        self.observation = self.make_observaton(obs)
 
         self.last_u = None
 
         self.initial_reset = False
-        return self.get_obs(), {}
+        return self.get_obs()
+
     def end(self):
         os.system('pkill torcs')
 
